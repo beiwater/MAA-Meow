@@ -48,15 +48,19 @@ class MaaApiService(
         }
 
         fun put(key: String, value: String): Boolean {
+            val file = calc(key)
+            val tmp = File(file.path + ".tmp")
             return try {
-                val file = calc(key)
                 file.parentFile?.mkdirs()
-                val tmp = File(file.path + ".tmp")
                 tmp.writeText(value)
-                check(tmp.renameTo(file)) { "rename failed: $tmp" }
+                if (!tmp.renameTo(file)) {
+                    file.delete()
+                    check(tmp.renameTo(file)) { "rename failed: $tmp" }
+                }
                 Timber.d("$TAG: cache saved: ${file.name}")
                 true
             } catch (e: Exception) {
+                tmp.delete()
                 Timber.w(e, "$TAG: failed to save cache")
                 false
             }
