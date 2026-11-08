@@ -30,6 +30,7 @@ import com.aliothmoon.maameow.BuildConfig
 import com.aliothmoon.maameow.announcement.AnnouncementConfig
 import com.aliothmoon.maameow.announcement.AnnouncementContent
 import com.aliothmoon.maameow.announcement.AnnouncementManager
+import com.aliothmoon.maameow.ai.AiChatImportRelay
 import com.aliothmoon.maameow.constant.Routes
 import com.aliothmoon.maameow.data.preferences.AppSettingsManager
 import com.aliothmoon.maameow.data.resource.BackgroundImageStore
@@ -60,7 +61,6 @@ import com.aliothmoon.maameow.presentation.view.settings.LogHistoryView
 import com.aliothmoon.maameow.presentation.view.settings.LiveUpdateSettingsView
 import com.aliothmoon.maameow.presentation.view.settings.TaskOverrideEditorView
 import com.aliothmoon.maameow.presentation.view.settings.WallpaperSettingsView
-import com.aliothmoon.maameow.presentation.view.settings.AiChatView
 import com.aliothmoon.maameow.presentation.view.settings.AiControlSettingsView
 import com.aliothmoon.maameow.presentation.viewmodel.AppEventsViewModel
 import com.aliothmoon.maameow.presentation.viewmodel.BackgroundTaskViewModel
@@ -86,7 +86,7 @@ import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 
-/** 主 Tab 路由集合（与 [BottomNavTab.all] 单一真源），用于判断是否处于主界面。 */
+/** 主 Tab 路由集合（与 [BottomNavTab.all] 单一真源），用于判断是否处于主界面。AI Tab 关掉时其路由只是空占位，不影响判断。 */
 private val MAIN_TAB_ROUTES: Set<String> = BottomNavTab.all.mapTo(HashSet()) { it.route }
 
 @Composable
@@ -99,6 +99,7 @@ fun AppNavigation(
     achievementReporter: AchievementReporter = koinInject(),
     resourceInitService: ResourceInitService = koinInject(),
     mainTabNavigator: MainTabNavigator = koinInject(),
+    aiChatImportRelay: AiChatImportRelay = koinInject(),
     appEventsViewModel: AppEventsViewModel = koinViewModel(),
 ) {
     val navController = rememberNavController()
@@ -116,6 +117,7 @@ fun AppNavigation(
     val coroutineScope = rememberCoroutineScope()
 
     val runMode by appSettings.runMode.collectAsStateWithLifecycle()
+    val aiControlEnabled by appSettings.aiControlEnabled.collectAsStateWithLifecycle()
     val announcementReadHash by appSettings.announcementReadHash.collectAsStateWithLifecycle()
     val language by appSettings.language.collectAsStateWithLifecycle()
     val announcementContent by announcementManager.content.collectAsStateWithLifecycle()
@@ -153,6 +155,14 @@ fun AppNavigation(
             }
     }
     val scheduledCountdownState by backgroundTaskViewModel.countdownState.collectAsStateWithLifecycle()
+
+    // maameow://ai-import 深链：解析与写入由设置页接管，这里只负责跳页
+    val pendingAiChatImport by aiChatImportRelay.request.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingAiChatImport) {
+        if (pendingAiChatImport != null) {
+            navController.navigate(Routes.AI_CONTROL) { launchSingleTop = true }
+        }
+    }
 
     // 判断是否处于主 Tab 页面
     val isOnMainTab = currentNavRoute == null || currentNavRoute in MAIN_TAB_ROUTES
@@ -221,6 +231,7 @@ fun AppNavigation(
                 MainScreen(
                     navController = navController,
                     backgroundTaskViewModel = backgroundTaskViewModel,
+                    aiControlEnabled = aiControlEnabled,
                     onViewAnnouncement = { forceShowAnnouncement = true },
                     onViewOnboarding = { onboardingState.start() },
                     visible = isOnMainTab,
@@ -283,9 +294,6 @@ fun AppNavigation(
                     }
                     composable(Routes.AI_CONTROL) {
                         AiControlSettingsView(navController = navController)
-                    }
-                    composable(Routes.AI_CHAT) {
-                        AiChatView(navController = navController)
                     }
                 }
             }

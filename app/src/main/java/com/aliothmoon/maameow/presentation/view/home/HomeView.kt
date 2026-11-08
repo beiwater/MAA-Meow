@@ -71,12 +71,15 @@ import com.aliothmoon.maameow.domain.models.RunMode
 import com.aliothmoon.maameow.domain.state.ResourceInitState
 import com.aliothmoon.maameow.manager.PermissionManager
 import com.aliothmoon.maameow.presentation.components.AdaptiveTaskPromptDialog
+import com.aliothmoon.maameow.presentation.components.AiChatEntryCard
 import com.aliothmoon.maameow.presentation.components.BackendReadyFixHost
 import com.aliothmoon.maameow.presentation.components.ChangelogDialog
 import com.aliothmoon.maameow.presentation.components.ResourceInitDialog
 import com.aliothmoon.maameow.presentation.components.UpdateCard
 import com.aliothmoon.maameow.presentation.components.rememberBackendReadyFixState
 import com.aliothmoon.maameow.presentation.onboarding.LocalOnboardingState
+import com.aliothmoon.maameow.presentation.navigation.BottomNavTab
+import com.aliothmoon.maameow.presentation.navigation.MainTabNavigator
 import com.aliothmoon.maameow.presentation.onboarding.OnboardingTarget
 import com.aliothmoon.maameow.presentation.onboarding.onboardingBlocksStartupDialogs
 import com.aliothmoon.maameow.presentation.onboarding.onboardingTarget
@@ -114,7 +117,8 @@ fun HomeView(
     viewModel: HomeViewModel = koinViewModel(),
     updateViewModel: UpdateViewModel = koinViewModel(),
     permissionManager: PermissionManager = koinInject(),
-    appSettingsManager: AppSettingsManager = koinInject()
+    appSettingsManager: AppSettingsManager = koinInject(),
+    mainTabNavigator: MainTabNavigator = koinInject(),
 ) {
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -125,6 +129,8 @@ fun HomeView(
     val context = LocalContext.current
     val (width, height) = remember(LocalConfiguration.current) { Misc.getScreenSize(context) }
     val shizukuShortcutEnabled by appSettingsManager.shizukuShortcutEnabled.collectAsStateWithLifecycle()
+    val aiControlEnabled by appSettingsManager.aiControlEnabled.collectAsStateWithLifecycle()
+    val aiChatTarget by appSettingsManager.aiChatTargetLabel.collectAsStateWithLifecycle()
 
     val startupDialog by updateViewModel.startupUpdateDialog.collectAsStateWithLifecycle()
 
@@ -386,6 +392,17 @@ fun HomeView(
                                     viewModel.onStartControlOverlay()
                                 }
                             }
+                        )
+                    }
+                }
+
+                // AI 层入口：仅在启用 AI 控制时出现，关闭时首页零痕迹（须排在引导靶点之后，勿前置）
+                if (aiControlEnabled) {
+                    item {
+                        AiChatEntryCard(
+                            subtitle = aiChatTarget
+                                ?: stringResource(R.string.ai_chat_setup_card_title),
+                            onClick = { mainTabNavigator.navigateTo(BottomNavTab.AI) }
                         )
                     }
                 }

@@ -1214,6 +1214,7 @@
     <string name="bottom_nav_background_task">작업</string>
     <string name="bottom_nav_schedule">예약</string>
     <string name="bottom_nav_settings">설정</string>
+    <string name="bottom_nav_ai">AI</string>
     <string name="navigation_toast_switch_background_mode">현재 포그라운드 모드입니다. 먼저 백그라운드 모드로 전환하세요</string>
 
     <!-- shared panel / toolbox -->
@@ -3100,7 +3101,6 @@
     <string name="ai_settings_script_name_label">스크립트 이름</string>
     <string name="ai_settings_save_script_btn">녹화된 초안을 스크립트로 저장</string>
     <string name="ai_settings_script_saved">스크립트가 프로필 목록에 저장되었습니다</string>
-    <string name="ai_settings_dify_section_title">Dify / RAGFlow 앱 API</string>
     <string name="ai_settings_dify_url_label">API 기본 URL (예: http://127.0.0.1/v1)</string>
     <string name="ai_settings_dify_key_label">앱 API 키 (app-...)</string>
     <string name="ai_settings_open_chat_btn">인앱 AI 어시스턴트 채팅 열기</string>
@@ -3108,4 +3108,36 @@
     <string name="ai_chat_clear">대화 지우기</string>
     <string name="ai_chat_input_hint">명령 입력 (예: 오늘 일일 작업 실행 / 1-7 5번 돌기)</string>
     <string name="ai_chat_send">전송</string>
+    <string name="ai_settings_chat_provider_title">AI 채팅 서비스</string>
+    <string name="ai_settings_chat_provider_dify">Dify</string>
+    <string name="ai_settings_chat_provider_openai">OpenAI 호환</string>
+    <string name="ai_settings_openai_url_label">API 기본 URL (예: https://api.deepseek.com/v1)</string>
+    <string name="ai_settings_openai_key_label">API 키 (sk-...)</string>
+    <string name="ai_settings_openai_model_label">모델 이름 (예: deepseek-chat)</string>
+    <string name="ai_settings_import_title">링크 또는 JSON에서 가져오기</string>
+    <string name="ai_settings_import_label">가져오기 링크 또는 JSON 붙여넣기</string>
+    <string name="ai_settings_import_paste_btn">붙여넣고 가져오기</string>
+    <string name="ai_settings_import_btn">가져오기</string>
+    <string name="ai_settings_import_clipboard_empty">클립보드에 가져올 텍스트가 없습니다</string>
+    <string name="ai_settings_import_success">%1$s · %2$s 가져옴</string>
+    <string name="ai_settings_import_helper">세 가지 형식을 지원합니다:\n① https://api.example.com/v1#sk-… (Base URL과 키를 공백 또는 | 로 구분해도 됩니다)\n② maameow://ai-import?baseUrl=…&amp;apiKey=…&amp;model=…\n③ pi models.json 조각 (providers 내 OpenAI 호환 항목)\nOAuth 구독 자격 증명(auth.json)은 가져올 수 없습니다. 해당 서비스의 OpenAI 호환 엔드포인트와 API 키를 사용하세요.</string>
+    <string name="ai_chat_empty_title">무엇을 도와드릴까요?</string>
+    <string name="ai_chat_example_1">오늘 일일 작업 실행해 줘</string>
+    <string name="ai_chat_example_2">지금 어느 단계까지 진행됐어?</string>
+    <string name="ai_chat_example_3">1-7 드롭 보상 알려 줘</string>
+    <string name="ai_chat_example_4">파밍 스크립트를 하나 저장해 줘</string>
+    <string name="ai_chat_setup_card_title">모델 키가 설정되지 않았습니다</string>
+    <string name="ai_chat_setup_card_desc">Base URL과 API 키를 입력하면 대화를 시작할 수 있습니다.</string>
+    <string name="ai_chat_setup_action">설정하기</string>
+    <string name="ai_chat_error_not_configured">대화 모델이 설정되지 않았습니다. AI 제어 설정에서 Base URL과 API 키를 먼저 입력하세요.</string>
+    <string name="ai_chat_error_network">%1$s:%2$d에 연결할 수 없습니다. Base URL 또는 네트워크를 확인하세요.</string>
+    <string name="ai_chat_error_unauthorized">API 키가 유효하지 않거나 권한이 없습니다</string>
+    <string name="ai_chat_error_not_found">인터페이스 경로가 없습니다. Base URL이 /v1로 끝나는지 확인하세요.</string>
+    <string name="ai_chat_error_rate_limited">요청이 너무 많거나 할당량이 부족합니다</string>
+    <string name="ai_chat_error_server">서버 오류 %1$d</string>
+    <string name="ai_chat_error_unknown">요청에 실패했습니다. 잠시 후 다시 시도하세요.</string>
+    <string name="ai_chat_thinking_header">생각 중… (%1$d자)</string>
+    <string name="ai_chat_tool_running">실행 중…</string>
+    <string name="ai_chat_tool_limit_reached">이번 턴의 도구 호출 한도(6라운드 / 8회)에 도달했습니다. 여기서 멈춥니다. 계속하려면 메시지를 다시 보내 주세요.</string>
+    <string name="home_ai_chat_entry_title">AI 채팅</string>
 </resources>

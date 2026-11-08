@@ -137,6 +137,7 @@ import com.aliothmoon.maameow.presentation.components.PageBackHandler
 import com.aliothmoon.maameow.presentation.components.LogExportController
 import com.aliothmoon.maameow.presentation.components.MaaWindowInsets
 import com.aliothmoon.maameow.presentation.components.collectWhilePageVisible
+import com.aliothmoon.maameow.presentation.components.AiChatEntryCard
 import com.aliothmoon.maameow.presentation.components.BottomBarOverlay
 import com.aliothmoon.maameow.presentation.components.LocalSettingRowBleed
 import com.aliothmoon.maameow.presentation.components.horizontalBleed
@@ -144,6 +145,7 @@ import com.aliothmoon.maameow.presentation.components.rememberBackendReadyFixSta
 import com.aliothmoon.maameow.presentation.components.rememberPageVisible
 import com.aliothmoon.maameow.presentation.components.rememberStagedBeyondViewportCount
 import com.aliothmoon.maameow.presentation.navigation.BottomNavTab
+import com.aliothmoon.maameow.presentation.navigation.MainTabNavigator
 import com.aliothmoon.maameow.presentation.onboarding.LocalOnboardingState
 import com.aliothmoon.maameow.presentation.onboarding.OnboardingTarget
 import com.aliothmoon.maameow.presentation.onboarding.onboardingTarget
@@ -218,6 +220,9 @@ fun BackgroundTaskView(
     val markers by viewModel.markers.collectAsStateWithLifecycle()
     val displayResolution by compositionService.displayResolution.collectAsStateWithLifecycle()
     val pipOnHome by appSettingsManager.pipOnHome.collectAsStateWithLifecycle()
+    val aiControlEnabled by appSettingsManager.aiControlEnabled.collectAsStateWithLifecycle()
+    val aiChatTarget by appSettingsManager.aiChatTargetLabel.collectAsStateWithLifecycle()
+    val mainTabNavigator: MainTabNavigator = koinInject()
     val isChainLoaded by viewModel.chainState.isLoaded.collectAsStateWithLifecycle()
     var hasInitialized by rememberSaveable { mutableStateOf(false) }
     if (isChainLoaded) {
@@ -518,6 +523,16 @@ fun BackgroundTaskView(
                     pagePosition = { pagerState.currentPage + pagerState.currentPageOffsetFraction },
                     modifier = Modifier.onboardingTarget(OnboardingTarget.BG_PANEL_TABS),
                 )
+
+                // AI 对话入口：任务页顶部直接可见，不用再翻到设置里找；AI 层关闭时零痕迹
+                if (aiControlEnabled) {
+                    AiChatEntryCard(
+                        subtitle = aiChatTarget ?: stringResource(R.string.ai_chat_setup_card_title),
+                        onClick = { mainTabNavigator.navigateTo(BottomNavTab.AI) },
+                        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                        compact = true,
+                    )
+                }
 
                 if (isInitialized) {
                     Column(

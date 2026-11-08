@@ -1214,6 +1214,7 @@
     <string name="bottom_nav_background_task">任务</string>
     <string name="bottom_nav_schedule">定时</string>
     <string name="bottom_nav_settings">设置</string>
+    <string name="bottom_nav_ai">AI</string>
     <string name="navigation_toast_switch_background_mode">当前是前台模式，请先切换到后台模式</string>
 
     <!-- shared panel / toolbox -->
@@ -3100,7 +3101,6 @@ MAA 不会因为取消勾选此选项而提前在局内结束探索</string>
     <string name="ai_settings_script_name_label">脚本名称</string>
     <string name="ai_settings_save_script_btn">保存录制草稿为配置脚本</string>
     <string name="ai_settings_script_saved">脚本已保存至配置列表</string>
-    <string name="ai_settings_dify_section_title">Dify / RAGFlow 应用 API</string>
     <string name="ai_settings_dify_url_label">API Base URL (例如 http://127.0.0.1/v1)</string>
     <string name="ai_settings_dify_key_label">App API Key (app-...)</string>
     <string name="ai_settings_open_chat_btn">打开应用内 AI 助手对话</string>
@@ -3108,4 +3108,36 @@ MAA 不会因为取消勾选此选项而提前在局内结束探索</string>
     <string name="ai_chat_clear">清空当前会话</string>
     <string name="ai_chat_input_hint">输入指令（例如：把今天日常跑完 / 刷 5 次 1-7）</string>
     <string name="ai_chat_send">发送</string>
+    <string name="ai_settings_chat_provider_title">AI 对话服务商</string>
+    <string name="ai_settings_chat_provider_dify">Dify</string>
+    <string name="ai_settings_chat_provider_openai">OpenAI 兼容</string>
+    <string name="ai_settings_openai_url_label">API Base URL（例如 https://api.deepseek.com/v1）</string>
+    <string name="ai_settings_openai_key_label">API Key（sk-…）</string>
+    <string name="ai_settings_openai_model_label">模型名称（例如 deepseek-chat）</string>
+    <string name="ai_settings_import_title">从链接或 JSON 导入</string>
+    <string name="ai_settings_import_label">粘贴导入链接或 JSON</string>
+    <string name="ai_settings_import_paste_btn">粘贴并导入</string>
+    <string name="ai_settings_import_btn">导入</string>
+    <string name="ai_settings_import_clipboard_empty">剪贴板里没有可导入的文本</string>
+    <string name="ai_settings_import_success">已导入 %1$s · %2$s</string>
+    <string name="ai_settings_import_helper">支持三种格式：\n① https://api.example.com/v1#sk-…（也可用空格或 | 分隔 Base URL 与 Key）\n② maameow://ai-import?baseUrl=…&amp;apiKey=…&amp;model=…\n③ pi 的 models.json 片段（providers 内的 OpenAI 兼容条目）\nOAuth 订阅凭据（auth.json）无法导入，请改用该服务的 OpenAI 兼容端点 + API Key。</string>
+    <string name="ai_chat_empty_title">有什么可以帮你？</string>
+    <string name="ai_chat_example_1">把今天日常跑完</string>
+    <string name="ai_chat_example_2">现在跑到哪一步了</string>
+    <string name="ai_chat_example_3">查一下 1-7 的掉落</string>
+    <string name="ai_chat_example_4">帮我存一个长草脚本</string>
+    <string name="ai_chat_setup_card_title">未配置模型密钥</string>
+    <string name="ai_chat_setup_card_desc">填写 Base URL 与 API Key 后即可开始对话。</string>
+    <string name="ai_chat_setup_action">去填写</string>
+    <string name="ai_chat_error_not_configured">未配置对话模型，请先在 AI 控制设置中填写 Base URL 与 API Key</string>
+    <string name="ai_chat_error_network">无法连接到 %1$s:%2$d，请检查 Base URL 或网络</string>
+    <string name="ai_chat_error_unauthorized">API Key 无效或无权限</string>
+    <string name="ai_chat_error_not_found">接口路径不存在，请检查 Base URL 是否以 /v1 结尾</string>
+    <string name="ai_chat_error_rate_limited">请求过于频繁或额度不足</string>
+    <string name="ai_chat_error_server">服务端错误 %1$d</string>
+    <string name="ai_chat_error_unknown">请求失败，请稍后重试</string>
+    <string name="ai_chat_thinking_header">思考中… (%1$d 字)</string>
+    <string name="ai_chat_tool_running">执行中…</string>
+    <string name="ai_chat_tool_limit_reached">已达到本轮工具调用上限（6 轮 / 8 次），先停在这里；如需继续请再发一条消息。</string>
+    <string name="home_ai_chat_entry_title">AI 对话</string>
 </resources>

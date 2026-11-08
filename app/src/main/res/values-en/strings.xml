@@ -1160,6 +1160,7 @@
     <string name="bottom_nav_background_task">Tasks</string>
     <string name="bottom_nav_schedule">Schedule</string>
     <string name="bottom_nav_settings">Settings</string>
+    <string name="bottom_nav_ai">AI</string>
     <string name="navigation_toast_switch_background_mode">Current mode is foreground. Switch to background mode first.</string>
 
     <!-- shared panel / toolbox -->
@@ -3043,7 +3044,6 @@ MAA will not end an in-progress exploration early because this option is uncheck
     <string name="ai_settings_script_name_label">Script Name</string>
     <string name="ai_settings_save_script_btn">Save Recorded Draft as Script</string>
     <string name="ai_settings_script_saved">Script saved to profiles</string>
-    <string name="ai_settings_dify_section_title">Dify / RAGFlow App API</string>
     <string name="ai_settings_dify_url_label">API Base URL (e.g. http://127.0.0.1/v1)</string>
     <string name="ai_settings_dify_key_label">App API Key (app-...)</string>
     <string name="ai_settings_open_chat_btn">Open In-App AI Assistant Chat</string>
@@ -3051,4 +3051,36 @@ MAA will not end an in-progress exploration early because this option is uncheck
     <string name="ai_chat_clear">Clear Conversation</string>
     <string name="ai_chat_input_hint">Ask AI (e.g. Run daily tasks / Farm 1-7 five times)</string>
     <string name="ai_chat_send">Send</string>
+    <string name="ai_settings_chat_provider_title">Chat Provider</string>
+    <string name="ai_settings_chat_provider_dify">Dify</string>
+    <string name="ai_settings_chat_provider_openai">OpenAI compatible</string>
+    <string name="ai_settings_openai_url_label">API Base URL (e.g. https://api.deepseek.com/v1)</string>
+    <string name="ai_settings_openai_key_label">API Key (sk-...)</string>
+    <string name="ai_settings_openai_model_label">Model name (e.g. deepseek-chat)</string>
+    <string name="ai_settings_import_title">Import from Link or JSON</string>
+    <string name="ai_settings_import_label">Paste import link or JSON</string>
+    <string name="ai_settings_import_paste_btn">Paste &amp; Import</string>
+    <string name="ai_settings_import_btn">Import</string>
+    <string name="ai_settings_import_clipboard_empty">Nothing to import in the clipboard</string>
+    <string name="ai_settings_import_success">Imported %1$s · %2$s</string>
+    <string name="ai_settings_import_helper">Three accepted formats:\n1. https://api.example.com/v1#sk-... (Base URL and key may also be separated by a space or |)\n2. maameow://ai-import?baseUrl=...&amp;apiKey=...&amp;model=...\n3. pi models.json snippet (OpenAI-compatible entry under providers)\nOAuth subscription credentials (auth.json) cannot be imported; use the provider\'s OpenAI-compatible endpoint with an API key instead.</string>
+    <string name="ai_chat_empty_title">What can I help with?</string>
+    <string name="ai_chat_example_1">Run the daily tasks for today</string>
+    <string name="ai_chat_example_2">Where is the current run now?</string>
+    <string name="ai_chat_example_3">Check the drops of stage 1-7</string>
+    <string name="ai_chat_example_4">Save a farming script for me</string>
+    <string name="ai_chat_setup_card_title">No model key configured</string>
+    <string name="ai_chat_setup_card_desc">Fill in the Base URL and API key to start chatting.</string>
+    <string name="ai_chat_setup_action">Set up</string>
+    <string name="ai_chat_error_not_configured">No chat model configured. Fill in the Base URL and API key in AI Control settings first.</string>
+    <string name="ai_chat_error_network">Cannot reach %1$s:%2$d. Check the Base URL or your network.</string>
+    <string name="ai_chat_error_unauthorized">API key is invalid or not authorized</string>
+    <string name="ai_chat_error_not_found">Endpoint not found. Check whether the Base URL ends with /v1.</string>
+    <string name="ai_chat_error_rate_limited">Too many requests or quota exhausted</string>
+    <string name="ai_chat_error_server">Server error %1$d</string>
+    <string name="ai_chat_error_unknown">Request failed. Please try again later.</string>
+    <string name="ai_chat_thinking_header">Thinking… (%1$d chars)</string>
+    <string name="ai_chat_tool_running">Running…</string>
+    <string name="ai_chat_tool_limit_reached">Reached this turn\'s tool limit (6 rounds / 8 calls). Stopping here — send another message to continue.</string>
+    <string name="home_ai_chat_entry_title">AI Chat</string>
 </resources>

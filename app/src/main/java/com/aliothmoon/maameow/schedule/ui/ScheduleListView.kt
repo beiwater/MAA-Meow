@@ -50,13 +50,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.aliothmoon.maameow.R
 import com.aliothmoon.maameow.constant.Routes
+import com.aliothmoon.maameow.data.preferences.AppSettingsManager
 import com.aliothmoon.maameow.domain.models.RemoteBackend
 import com.aliothmoon.maameow.manager.PermissionManager
+import com.aliothmoon.maameow.presentation.components.AiChatEntryCard
 import com.aliothmoon.maameow.presentation.components.BackendReadyFixHost
 import com.aliothmoon.maameow.presentation.components.InfoCard
 import com.aliothmoon.maameow.presentation.components.SettingRow
 import com.aliothmoon.maameow.presentation.components.TopAppBar
 import com.aliothmoon.maameow.presentation.components.rememberBackendReadyFixState
+import com.aliothmoon.maameow.presentation.navigation.BottomNavTab
+import com.aliothmoon.maameow.presentation.navigation.MainTabNavigator
 import com.aliothmoon.maameow.presentation.onboarding.OnboardingTarget
 import com.aliothmoon.maameow.presentation.onboarding.onboardingBlocksStartupDialogs
 import com.aliothmoon.maameow.presentation.onboarding.onboardingTarget
@@ -86,6 +90,10 @@ fun ScheduleListView(
     val pageActive = isActivePage()
 
     val permissionManager: PermissionManager = koinInject()
+    val appSettingsManager: AppSettingsManager = koinInject()
+    val mainTabNavigator: MainTabNavigator = koinInject()
+    val aiControlEnabled by appSettingsManager.aiControlEnabled.collectAsStateWithLifecycle()
+    val aiChatTarget by appSettingsManager.aiChatTargetLabel.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     val schedulePrefs = remember(context) {
@@ -208,6 +216,15 @@ fun ScheduleListView(
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (aiControlEnabled) {
+                item(key = "ai-chat") {
+                    AiChatEntryCard(
+                        subtitle = aiChatTarget ?: stringResource(R.string.ai_chat_setup_card_title),
+                        onClick = { mainTabNavigator.navigateTo(BottomNavTab.AI) },
+                        compact = true,
+                    )
+                }
+            }
             if (state.healthIssues.isNotEmpty()) {
                 item(key = "schedule-health") {
                     ScheduleHealthCard(
@@ -221,7 +238,7 @@ fun ScheduleListView(
                 item(key = "empty") {
                     // fillParentMaxSize 撑的是整个 LazyColumn 视口，上面有别的项时
                     // 会把空状态顶到折叠线以下
-                    val isOnlyItem = state.healthIssues.isEmpty()
+                    val isOnlyItem = state.healthIssues.isEmpty() && !aiControlEnabled
                     ScheduleEmptyState(
                         modifier = if (isOnlyItem) {
                             Modifier.fillParentMaxSize()

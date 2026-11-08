@@ -3,18 +3,25 @@ package com.aliothmoon.maameow.presentation.navigation
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -31,6 +38,7 @@ import com.aliothmoon.maameow.presentation.pip.LocalIsInPip
 import com.aliothmoon.maameow.presentation.onboarding.onboardingBlocksStartupDialogs
 import com.aliothmoon.maameow.presentation.view.background.BackgroundTaskView
 import com.aliothmoon.maameow.presentation.view.home.HomeView
+import com.aliothmoon.maameow.presentation.view.settings.AiChatView
 import com.aliothmoon.maameow.presentation.view.settings.SettingsView
 import com.aliothmoon.maameow.presentation.viewmodel.BackgroundTaskViewModel
 import com.aliothmoon.maameow.schedule.ui.ScheduleListView
@@ -44,31 +52,51 @@ import org.koin.compose.koinInject
 import kotlin.math.abs
 
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MainScreen(
     modifier: Modifier = Modifier,
     navController: NavController,
     backgroundTaskViewModel: BackgroundTaskViewModel,
+    aiControlEnabled: Boolean,
     onViewAnnouncement: () -> Unit = {},
     onViewOnboarding: () -> Unit = {},
     visible: Boolean = true,
     fullscreen: Boolean = false,
     parallax: MutableFloatState,
 ) {
-    val pagerState = rememberPagerState(pageCount = { BottomNavTab.all.size })
+    // AI 控制开关决定底栏是否有 AI Tab；全部分页下标都以 tabs 为准，不要碰 BottomNavTab.all
+    val tabs = remember(aiControlEnabled) { BottomNavTab.visibleTabs(aiControlEnabled) }
+    val pagerState = rememberPagerState(pageCount = { tabs.size })
     val scope = rememberCoroutineScope()
     val reduceMotion = LocalReduceMotion.current
     val chromeHidden = fullscreen || LocalIsInPip.current
     val inputFocus = LocalInputFocusManager.current
     val mainVisible = rememberUpdatedState(visible)
+    // 键盘弹出时收起底栏：聊天页要贴着键盘，底栏留着会多顶出一条缝
+    val imeVisible = WindowInsets.isImeVisible
+
+    // tabs 增减时按路由把当前页挪到新下标；错位会让人莫名停到别的 Tab。
+    // 选中路由在组合期同步（只在 tabs 未变的帧里读 pager）：tabs 一变，pager 会被自动夹取，
+    // 那一帧再读 currentPage 会把「设置」读成「定时」。
+    var selectedRoute by remember { mutableStateOf(tabs.first().route) }
+    var previousTabs by remember { mutableStateOf(tabs) }
+    if (previousTabs == tabs) {
+        selectedRoute = tabs.getOrNull(pagerState.currentPage)?.route ?: selectedRoute
+    }
+    LaunchedEffect(tabs) {
+        val target = resolvePageForTabs(tabs, selectedRoute, pagerState.currentPage)
+        if (target != pagerState.currentPage) pagerState.scrollToPage(target)
+        previousTabs = tabs
+    }
 
     // 把分页位置实时上报给背景层做视差，归一化到 -1~1。
     // 不能只用 currentPageOffsetFraction：它在滑过中点时随 currentPage 进位翻符号，背景会瞬移。
     // 减弱动效由背景层统一忽略，这里照常上报。
     LaunchedEffect(pagerState) {
-        val lastIndex = (BottomNavTab.all.size - 1).coerceAtLeast(1)
         snapshotFlow { pagerState.currentPage + pagerState.currentPageOffsetFraction }
             .collect { position ->
+                val lastIndex = (pagerState.pageCount - 1).coerceAtLeast(1)
                 parallax.floatValue = (position / lastIndex * 2f - 1f).coerceIn(-1f, 1f)
             }
     }
@@ -76,7 +104,7 @@ fun MainScreen(
     // targetPage：点击/滑动一旦确定目标即生效，停稳后等于 currentPage。
     // animateScrollToPage 内部走 MutatorMutex，连续调用时后者自动接管，无需手动取消。
     fun goToPage(index: Int, animate: Boolean = true) {
-        if (index !in BottomNavTab.all.indices || index == pagerState.targetPage) return
+        if (index !in tabs.indices || index == pagerState.targetPage) return
         inputFocus.clear()
         scope.launch {
             if (!animate) {
@@ -102,7 +130,8 @@ fun MainScreen(
     // 主 Tab 路由是空占位不能 navigate，只能先 pop 回主界面再滑 pager
     fun surfaceToTab(tab: BottomNavTab, animate: Boolean = true) {
         navController.popBackStack(Routes.HOME, false)
-        goToPage(BottomNavTab.all.indexOf(tab), animate)
+        // Tab 被关掉（AI 控制关闭）时退回首页，别留在越界的下标上
+        goToPage(tabs.indexOf(tab).takeIf { it >= 0 } ?: 0, animate)
     }
 
     // 定时任务触发时自动浮出后台任务页
@@ -128,11 +157,15 @@ fun MainScreen(
     val scaffoldContent: @Composable () -> Unit = {
         Scaffold(
             modifier = modifier,
+            // 键盘抬起时内容要伸到窗口底边，聊天页自己的 imePadding 才不会和底栏/导航栏 inset 叠成两层
+            contentWindowInsets = if (imeVisible) WindowInsets(0) else ScaffoldDefaults.contentWindowInsets,
             bottomBar = {
-                if (visible && !chromeHidden) {
+                // IME 弹出时让位：底栏盖在键盘后面只会把输入框顶出一条缝
+                if (visible && !chromeHidden && !imeVisible) {
                     AppBottomNavigation(
-                        currentRoute = BottomNavTab.all[pagerState.targetPage].route,
-                        onTabSelected = { tab -> goToPage(BottomNavTab.all.indexOf(tab)) },
+                        currentRoute = (tabs.getOrNull(pagerState.targetPage) ?: tabs.first()).route,
+                        tabs = tabs,
+                        onTabSelected = { tab -> goToPage(tabs.indexOf(tab)) },
                     )
                 }
             },
@@ -151,18 +184,23 @@ fun MainScreen(
                     HorizontalPager(
                         state = pagerState,
                         beyondViewportPageCount = rememberStagedBeyondViewportCount(
-                            pagerState, BottomNavTab.all.lastIndex
+                            pagerState, tabs.lastIndex.coerceAtLeast(0)
                         ),
                         modifier = Modifier.fillMaxSize(),
-                        key = { BottomNavTab.all[it].route },
+                        // 下标可能比 tabs 长一帧（tabs 刚减员的过渡帧），回退到占位 key 免得越界
+                        key = { page -> tabs.getOrNull(page)?.route ?: "tab_$page" },
                         userScrollEnabled = visible && !chromeHidden,
                         pageSpacing = PagerPageSpacing,
                         flingBehavior = pagerFling,
                         pageNestedScrollConnection = rememberOuterPagerNestedScroll(pagerState, pagerFling),
                     ) { page ->
                         CompositionLocalProvider(LocalPageVisible provides rememberPageVisible(pagerState, page)) {
-                            when (BottomNavTab.all[page]) {
+                            when (tabs.getOrNull(page)) {
                                 BottomNavTab.HOME -> HomeView(navController = navController)
+                                BottomNavTab.AI -> AiChatView(
+                                    navController = navController,
+                                    isTab = true,
+                                )
                                 BottomNavTab.BACKGROUND -> BackgroundTaskView(
                                     viewModel = backgroundTaskViewModel,
                                     isActivePage = { mainVisible.value && pagerState.targetPage == page },
@@ -180,6 +218,7 @@ fun MainScreen(
                                     onViewAnnouncement = onViewAnnouncement,
                                     onViewOnboarding = onViewOnboarding,
                                 )
+                                null -> Unit
                             }
                         }
                     }
