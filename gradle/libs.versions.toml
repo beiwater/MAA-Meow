@@ -54,6 +54,8 @@ kotlinxCoroutines = "1.11.0"
 kotlinxSerializationJson = "1.12.0"
 hyperNotification = "1.4"
 
+mcpKotlinSdk = "0.16.0"
+ktor = "3.6.1"
 # Testing
 mockk = "1.14.11"
 junit = "4.13.2"
@@ -118,6 +120,13 @@ compose-markdown = { group = "com.github.jeziellago", name = "compose-markdown",
 reorderable = { group = "sh.calvin.reorderable", name = "reorderable", version.ref = "reorderable" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 xzakota-focus-api = { group = "com.xzakota.hyper.notification", name = "focus-api", version.ref = "hyperNotification" }
+mcp-kotlin-sdk-server = { group = "io.modelcontextprotocol", name = "kotlin-sdk-server", version.ref = "mcpKotlinSdk" }
+mcp-kotlin-sdk-client = { group = "io.modelcontextprotocol", name = "kotlin-sdk-client", version.ref = "mcpKotlinSdk" }
+mcp-kotlin-sdk-testing = { group = "io.modelcontextprotocol", name = "kotlin-sdk-testing", version.ref = "mcpKotlinSdk" }
+ktor-server-core = { group = "io.ktor", name = "ktor-server-core", version.ref = "ktor" }
+ktor-server-cio = { group = "io.ktor", name = "ktor-server-cio", version.ref = "ktor" }
+ktor-server-sse = { group = "io.ktor", name = "ktor-server-sse", version.ref = "ktor" }
+ktor-server-test-host = { group = "io.ktor", name = "ktor-server-test-host", version.ref = "ktor" }
 
 
 

@@ -33,4 +33,5 @@ include(":app")
 include(":hidden-api")
 include(":annotation-api")
 include(":ksp-processor")
+include(":ai-mcp")
  

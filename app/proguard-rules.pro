@@ -94,3 +94,7 @@
     public static **[] values();
     public static ** valueOf(java.lang.String);
 }
+
+# Ktor debug detector references JVM ManagementFactory unavailable on Android runtime
+-dontwarn java.lang.management.**
+-dontwarn org.slf4j.**

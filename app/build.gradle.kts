@@ -201,6 +201,7 @@ kotlin {
 dependencies {
     compileOnly(project(":hidden-api"))
     implementation(project(":annotation-api"))
+    implementation(project(":ai-mcp"))
     ksp(project(":ksp-processor"))
 
     implementation(libs.androidx.core.ktx)
