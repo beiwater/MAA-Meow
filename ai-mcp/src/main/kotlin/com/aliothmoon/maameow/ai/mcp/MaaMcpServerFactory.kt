@@ -14,10 +14,12 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.server.sse.SSE
+import io.modelcontextprotocol.kotlin.sdk.server.ClientConnection
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
 import io.modelcontextprotocol.kotlin.sdk.server.mcp
 import io.modelcontextprotocol.kotlin.sdk.server.mcpStreamableHttp
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.ImageContent
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
@@ -44,7 +46,20 @@ object MaaMcpServerFactory {
     }
 
     /**
+     * 全部工具的元数据（唯一权威来源，见 [maaToolSpecs]）。
+     * 本机 MCP 服务端、应用内助手的系统提示词、OpenAI `tools[]` 都从这里生成。
+     */
+    val toolSpecs: List<MaaToolSpec> get() = maaToolSpecs
+
+    private val toolSpecsByName: Map<String, MaaToolSpec> by lazy {
+        maaToolSpecs.associateBy { it.name }
+    }
+
+    /**
      * Creates an official MCP [Server] instance with all tool handlers registered.
+     *
+     * 工具的名称/描述/参数 schema 来自 [toolSpecs]，这里只保留执行逻辑，
+     * 因此 `tools/list` 与系统提示词天然一致。
      */
     fun createServer(
         bridge: MaaToolBridge,
@@ -63,29 +78,29 @@ object MaaMcpServerFactory {
             ),
         )
 
-        // 1. maa_status
-        server.addTool(
-            name = "maa_status",
-            description = "Query current MaaCompositionService execution state, active profile, and TaskChainStatusTracker task progress.",
-            inputSchema = ToolSchema(properties = buildJsonObject {}),
+        // 元数据一律取自 toolSpecs；name 缺失会在这里立即失败，而不是悄悄少注册一个工具。
+        fun addTool(
+            name: String,
+            handler: suspend ClientConnection.(CallToolRequest) -> CallToolResult,
         ) {
+            val spec = toolSpecsByName.getValue(name)
+            server.addTool(
+                name = spec.name,
+                description = spec.description,
+                inputSchema = ToolSchema(
+                    properties = spec.properties,
+                    required = spec.required,
+                ),
+                handler = handler,
+            )
+        }
+
+        addTool("maa_status") {
             val status = bridge.getStatus()
             okResult(json.encodeToString(status))
         }
 
-        // 2. maa_list_task_types
-        server.addTool(
-            name = "maa_list_task_types",
-            description = "Return JSON Schema and default config for all TaskTypeInfo / TaskParamProvider task types (auto-generated from kotlinx.serialization descriptors).",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("type_id", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Optional task type filter (e.g. COMBAT, BASE, RECRUITING, AUTO_ROGUELIKE)")
-                    })
-                },
-            ),
-        ) { req ->
+        addTool("maa_list_task_types") { req ->
             val filter = (req.arguments?.get("type_id") as? JsonPrimitive)?.contentOrNull
             val specs = if (filter.isNullOrBlank()) {
                 bridge.taskSpecs
@@ -99,29 +114,12 @@ object MaaMcpServerFactory {
             okResult(json.encodeToString(catalog))
         }
 
-        // 3. maa_list_profiles
-        server.addTool(
-            name = "maa_list_profiles",
-            description = "List all TaskProfiles in TaskChainState.",
-            inputSchema = ToolSchema(properties = buildJsonObject {}),
-        ) {
+        addTool("maa_list_profiles") {
             val profiles = bridge.listProfiles()
             okResult(json.encodeToString(profiles))
         }
 
-        // 4. maa_get_profile
-        server.addTool(
-            name = "maa_get_profile",
-            description = "Get full TaskProfile (TaskChainNode -> TaskParamProvider) by profile_id (or active profile if omitted).",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("profile_id", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Profile ID to fetch; defaults to active profile if empty")
-                    })
-                },
-            ),
-        ) { req ->
+        addTool("maa_get_profile") { req ->
             val profileId = (req.arguments?.get("profile_id") as? JsonPrimitive)?.contentOrNull.orEmpty()
             val targetId = profileId.ifBlank { bridge.getStatus().activeProfileId }
             val profile = bridge.getProfile(targetId)
@@ -129,24 +127,7 @@ object MaaMcpServerFactory {
             okResult(json.encodeToString(profile))
         }
 
-        // 5. maa_create_profile
-        server.addTool(
-            name = "maa_create_profile",
-            description = "Validate against TaskParamProvider schema and Arknights stable IDs, then create and persist a new TaskProfile in TaskChainState.",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("name", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Profile display name (max 20 chars)")
-                    })
-                    put("chain", buildJsonObject {
-                        put("type", "array")
-                        put("description", "List of TaskChainNode objects ({name, enabled, config: {type, ...}})")
-                    })
-                },
-                required = listOf("name", "chain"),
-            ),
-        ) { req ->
+        addTool("maa_create_profile") { req ->
             val name = (req.arguments?.get("name") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             if (name.isEmpty()) return@addTool errorResult("Missing required 'name'")
             val chain = req.arguments?.get("chain") as? JsonArray
@@ -163,28 +144,7 @@ object MaaMcpServerFactory {
             )
         }
 
-        // 6. maa_update_profile
-        server.addTool(
-            name = "maa_update_profile",
-            description = "Validate and update an existing TaskProfile in TaskChainState; unknown fields or invalid stage/operator IDs are rejected.",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("profile_id", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Target profile ID")
-                    })
-                    put("name", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Optional new profile name")
-                    })
-                    put("chain", buildJsonObject {
-                        put("type", "array")
-                        put("description", "Optional updated TaskChainNode array")
-                    })
-                },
-                required = listOf("profile_id"),
-            ),
-        ) { req ->
+        addTool("maa_update_profile") { req ->
             val profileId = (req.arguments?.get("profile_id") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             if (profileId.isEmpty()) return@addTool errorResult("Missing required 'profile_id'")
             val name = (req.arguments?.get("name") as? JsonPrimitive)?.contentOrNull?.trim()
@@ -203,24 +163,7 @@ object MaaMcpServerFactory {
             )
         }
 
-        // 7. maa_delete_profile
-        server.addTool(
-            name = "maa_delete_profile",
-            description = "Delete a TaskProfile by profile_id (requires confirm=true; cannot delete the last remaining profile).",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("profile_id", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Profile ID to delete")
-                    })
-                    put("confirm", buildJsonObject {
-                        put("type", "boolean")
-                        put("description", "Must be true to confirm deletion")
-                    })
-                },
-                required = listOf("profile_id", "confirm"),
-            ),
-        ) { req ->
+        addTool("maa_delete_profile") { req ->
             val profileId = (req.arguments?.get("profile_id") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             val confirm = (req.arguments?.get("confirm") as? JsonPrimitive)?.booleanOrNull ?: false
             if (!confirm) {
@@ -232,23 +175,7 @@ object MaaMcpServerFactory {
             )
         }
 
-        // 8. maa_run_profile
-        server.addTool(
-            name = "maa_run_profile",
-            description = "Asynchronously launch a TaskProfile via MaaCompositionService.start and immediately return run_id. Poll maa_status for progress. 'force' aligns with extra_force_start.",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("profile_id", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Profile ID to run; defaults to active profile if omitted")
-                    })
-                    put("force", buildJsonObject {
-                        put("type", "boolean")
-                        put("description", "If true, stop any currently running session before starting (extra_force_start semantics)")
-                    })
-                },
-            ),
-        ) { req ->
+        addTool("maa_run_profile") { req ->
             val profileId = (req.arguments?.get("profile_id") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
             val force = (req.arguments?.get("force") as? JsonPrimitive)?.booleanOrNull ?: false
             bridge.runProfile(profileId, force).fold(
@@ -257,36 +184,14 @@ object MaaMcpServerFactory {
             )
         }
 
-        // 9. maa_stop
-        server.addTool(
-            name = "maa_stop",
-            description = "Stop the currently running task chain or copilot via MaaCompositionService.stop.",
-            inputSchema = ToolSchema(properties = buildJsonObject {}),
-        ) {
+        addTool("maa_stop") {
             bridge.stop().fold(
                 onSuccess = { okResult(buildJsonObject { put("stopped", it) }.toString()) },
                 onFailure = { errorResult(it.message ?: "Failed to stop") },
             )
         }
 
-        // 10. maa_save_script
-        server.addTool(
-            name = "maa_save_script",
-            description = "Save effective run parameters / recorded task chain as a versioned TaskProfile script compatible with ConfigBackupManager.",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("name", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Script / profile name")
-                    })
-                    put("chain", buildJsonObject {
-                        put("type", "array")
-                        put("description", "Optional explicit chain; if omitted, snapshots the recorded/last effective run parameters")
-                    })
-                },
-                required = listOf("name"),
-            ),
-        ) { req ->
+        addTool("maa_save_script") { req ->
             val name = (req.arguments?.get("name") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             if (name.isEmpty()) return@addTool errorResult("Missing required 'name'")
             val chainOverride = req.arguments?.get("chain") as? JsonArray
@@ -302,34 +207,12 @@ object MaaMcpServerFactory {
             )
         }
 
-        // 11. maa_list_scripts
-        server.addTool(
-            name = "maa_list_scripts",
-            description = "List saved TaskProfile scripts and any active recorded draft.",
-            inputSchema = ToolSchema(properties = buildJsonObject {}),
-        ) {
+        addTool("maa_list_scripts") {
             val scripts = bridge.listScripts()
             okResult(json.encodeToString(scripts))
         }
 
-        // 12. maa_run_script
-        server.addTool(
-            name = "maa_run_script",
-            description = "Asynchronously execute a saved script (TaskProfile) by profile_id.",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("profile_id", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Script / profile ID to execute")
-                    })
-                    put("force", buildJsonObject {
-                        put("type", "boolean")
-                        put("description", "Force start if another task is running")
-                    })
-                },
-                required = listOf("profile_id"),
-            ),
-        ) { req ->
+        addTool("maa_run_script") { req ->
             val profileId = (req.arguments?.get("profile_id") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             if (profileId.isEmpty()) return@addTool errorResult("Missing required 'profile_id'")
             val force = (req.arguments?.get("force") as? JsonPrimitive)?.booleanOrNull ?: false
@@ -339,23 +222,7 @@ object MaaMcpServerFactory {
             )
         }
 
-        // 13. maa_get_logs
-        server.addTool(
-            name = "maa_get_logs",
-            description = "Fetch recent session logs from MaaSessionLogger (redacted by default).",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("limit", buildJsonObject {
-                        put("type", "integer")
-                        put("description", "Max log entries to return (default 100, max 500)")
-                    })
-                    put("redact", buildJsonObject {
-                        put("type", "boolean")
-                        put("description", "Redact tokens/paths/account IDs (default true)")
-                    })
-                },
-            ),
-        ) { req ->
+        addTool("maa_get_logs") { req ->
             val limit = ((req.arguments?.get("limit") as? JsonPrimitive)?.intOrNull ?: 100).coerceIn(1, 500)
             val redact = (req.arguments?.get("redact") as? JsonPrimitive)?.booleanOrNull ?: true
             val logs = bridge.getLogs(limit = limit, redactSensitive = redact)
@@ -366,12 +233,7 @@ object MaaMcpServerFactory {
             }))
         }
 
-        // 14. maa_screenshot
-        server.addTool(
-            name = "maa_screenshot",
-            description = "Capture a current game frame via FrameSnapshotter / MaaCoreService.GetImage (disabled by default in settings for privacy).",
-            inputSchema = ToolSchema(properties = buildJsonObject {}),
-        ) {
+        addTool("maa_screenshot") {
             if (!screenshotEnabled()) {
                 return@addTool errorResult("maa_screenshot is disabled by default. Enable 'Allow AI Screenshot' in MaaMeow AI Control Settings first.")
             }
@@ -391,24 +253,7 @@ object MaaMcpServerFactory {
             )
         }
 
-        // 15. maa_load_copilot
-        server.addTool(
-            name = "maa_load_copilot",
-            description = "Load and start a PRTS copilot code (maa://...) or JSON via CopilotManager and CopilotConfig.",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("copilot", buildJsonObject {
-                        put("type", "string")
-                        put("description", "PRTS copilot code (e.g. maa://12345) or copilot JSON string")
-                    })
-                    put("config", buildJsonObject {
-                        put("type", "object")
-                        put("description", "Optional CopilotConfig overrides (formation, addTrust, loopTimes, etc.)")
-                    })
-                },
-                required = listOf("copilot"),
-            ),
-        ) { req ->
+        addTool("maa_load_copilot") { req ->
             val copilotInput = (req.arguments?.get("copilot") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             if (copilotInput.isEmpty()) return@addTool errorResult("Missing required 'copilot'")
             val configObj = req.arguments?.get("config") as? JsonObject
@@ -418,28 +263,7 @@ object MaaMcpServerFactory {
             )
         }
 
-        // 16. maa_search_wiki
-        server.addTool(
-            name = "maa_search_wiki",
-            description = "Search Arknights wikis in real-time for operator stats, skills, talents, stage walkthroughs, enemy attributes, lore, or drop rates. Supports PRTS Wiki (prts.wiki) and Arknights Terra Wiki (arknights.wiki.gg).",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("query", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Search keywords, e.g. \"银灰\", \"SilverAsh\", \"1-7\", \"纯金年代\", \"萨米肉鸽 坍缩范式\"")
-                    })
-                    put("limit", buildJsonObject {
-                        put("type", "integer")
-                        put("description", "Max results to return, default 5, range 1-10")
-                    })
-                    put("wiki", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Wiki source: \"auto\" (default: fast wiki.gg for English queries, PRTS with wiki.gg fallback for Chinese), \"prts\" (PRTS Wiki), or \"wiki_gg\" (Arknights Terra Wiki)")
-                    })
-                },
-                required = listOf("query"),
-            ),
-        ) { req ->
+        addTool("maa_search_wiki") { req ->
             val query = (req.arguments?.get("query") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             if (query.isEmpty()) return@addTool errorResult("Missing required 'query'")
             val limit = (req.arguments?.get("limit") as? JsonPrimitive)?.intOrNull?.coerceIn(1, 10) ?: 5
@@ -450,24 +274,7 @@ object MaaMcpServerFactory {
             )
         }
 
-        // 17. maa_get_user_data
-        server.addTool(
-            name = "maa_get_user_data",
-            description = "Query the player's personal owned operators (OperBox: levels, elite promotion E0/E1/E2, potential, skill masteries, modules) and depot materials inventory (Depot).",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("category", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Query category: \"operators\" (owned operators), \"depot\" (depot materials), or \"all\" (default, both)")
-                    })
-                    put("filter", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Operator name or material name/ID to filter")
-                    })
-                },
-                required = emptyList(),
-            ),
-        ) { req ->
+        addTool("maa_get_user_data") { req ->
             val category = (req.arguments?.get("category") as? JsonPrimitive)?.contentOrNull?.trim()?.lowercase() ?: "all"
             val filter = (req.arguments?.get("filter") as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
             bridge.getUserData(category, filter).fold(
@@ -476,24 +283,7 @@ object MaaMcpServerFactory {
             )
         }
 
-        // 18. maa_get_wiki_article
-        server.addTool(
-            name = "maa_get_wiki_article",
-            description = "Fetch the full content of an Arknights Wiki article (PRTS Wiki or Arknights Terra Wiki) converted into clean Markdown text.",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("title", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Article title, e.g. \"银灰\", \"SilverAsh\", \"1-7\", \"纯金年代\"")
-                    })
-                    put("wiki", buildJsonObject {
-                        put("type", "string")
-                        put("description", "Wiki source: \"auto\" (default: wiki.gg for pure English titles, PRTS for Chinese with wiki.gg fallback), \"prts\" (PRTS Wiki), or \"wiki_gg\" (Arknights Terra Wiki)")
-                    })
-                },
-                required = listOf("title"),
-            ),
-        ) { req ->
+        addTool("maa_get_wiki_article") { req ->
             val title = (req.arguments?.get("title") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             if (title.isEmpty()) return@addTool errorResult("Missing required 'title'")
             val wiki = (req.arguments?.get("wiki") as? JsonPrimitive)?.contentOrNull?.trim()?.lowercase() ?: "auto"
@@ -503,24 +293,7 @@ object MaaMcpServerFactory {
             )
         }
 
-        // 19. maa_click
-        server.addTool(
-            name = "maa_click",
-            description = "Send a targeted emergency click to game coordinates (x, y) (standard 1280x720 space) to dismiss unexpected popups, announcements, network dialogs, or handle stuck screens.",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {
-                    put("x", buildJsonObject {
-                        put("type", "integer")
-                        put("description", "X coordinate in standard 1280x720 game space (0..1280)")
-                    })
-                    put("y", buildJsonObject {
-                        put("type", "integer")
-                        put("description", "Y coordinate in standard 1280x720 game space (0..720)")
-                    })
-                },
-                required = listOf("x", "y"),
-            ),
-        ) { req ->
+        addTool("maa_click") { req ->
             val x = (req.arguments?.get("x") as? JsonPrimitive)?.intOrNull
                 ?: return@addTool errorResult("Missing or invalid 'x' coordinate")
             val y = (req.arguments?.get("y") as? JsonPrimitive)?.intOrNull
@@ -531,15 +304,7 @@ object MaaMcpServerFactory {
             )
         }
 
-        // 20. maa_back_to_home
-        server.addTool(
-            name = "maa_back_to_home",
-            description = "Execute MAA Core's native BackToHome navigation routine to return from any stuck sub-screen or modal dialog back to the main lobby.",
-            inputSchema = ToolSchema(
-                properties = buildJsonObject {},
-                required = emptyList(),
-            ),
-        ) { _ ->
+        addTool("maa_back_to_home") { _ ->
             bridge.backToHome().fold(
                 onSuccess = { okResult("BackToHome routine executed successfully") },
                 onFailure = { errorResult(it.message ?: "Failed to execute BackToHome") },
