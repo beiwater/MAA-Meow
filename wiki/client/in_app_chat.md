@@ -2,6 +2,8 @@
 
 MaaMeow 为用户提供了一个极简、轻量的内置聊天交互界面（`AiChatView`），让用户无需切换至 PC 即可直接向 AI 发送指令、查看流式回复以及观测底层 MCP 工具的执行状态。
 
+> 当前版本默认后端为 **OpenAI 兼容** `/chat/completions`（DeepSeek / OpenAI / Kimi / SiliconFlow / Ollama 等），也可在设置中切回 Dify。双后端的架构、设置键、错误映射与验证方式见 [应用内对话：OpenAI 兼容 / Dify 双后端](../hand/in_app_chat.md)；本页保留 Dify 后端的协议细节。
+
 ---
 
 ## 1. 架构定位：极致纯粹的薄客户端 (Thin Client)

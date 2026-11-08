@@ -11,6 +11,7 @@
   - [20 项 MCP 工具规范与 Schema](hand/mcp_tools.md)
   - [服务生命周期与安全隐私闸门](hand/service_and_security.md)
   - [定时任务、自动唤醒与自启机制](hand/scheduled_tasks.md)
+  - [应用内对话：OpenAI 兼容 / Dify 双后端](hand/in_app_chat.md)
 - **脑侧知识库与防幻觉 (The Brain: RAG & Eval)**
   - [明日方舟专用 RAG 语料库](brain/rag_knowledge_base.md)
   - [实体校验与防幻觉设计](brain/anti_hallucination.md)

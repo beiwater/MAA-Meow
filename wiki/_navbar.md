@@ -8,6 +8,7 @@
   * [20 项 MCP 工具规范](hand/mcp_tools.md)
   * [服务与安全模型](hand/service_and_security.md)
   * [定时任务与自启机制](hand/scheduled_tasks.md)
+  * [应用内对话双后端](hand/in_app_chat.md)
 * 脑侧与评测
   * [明日方舟 RAG 语料库](brain/rag_knowledge_base.md)
   * [实体防幻觉校验](brain/anti_hallucination.md)

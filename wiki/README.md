@@ -34,9 +34,12 @@ MaaMeow 是一款原生运行于 Android 系统的明日方舟日常自动化伴
   - **客户端**：流行的开源桌面客户端，如 **Cherry Studio**、**Chatbox** 或 **Cursor**
   - **费用**：按 Token 计费（例如 1 元几百万 Token 的 **DeepSeek V3 / R1**，极具性价比）。
   - **连接**：在客户端设置中填入 API Key，并在 MCP 设置中添加 MaaMeow 地址 `http://127.0.0.1:18080/mcp`，客户端自带 ReAct 工具循环，直接指挥手机！
-- **模式 3：API Key + 手机 App 内聊天（Dify 方案）**
-  - **客户端**：MaaMeow 手机 App 内置「AI 助手」界面
-  - **服务端**：家庭 NAS/PC 运行 Dify 容器，在 Dify 填入你的 DeepSeek/OpenAI API Key 并挂载明日方舟知识库。
+- **模式 3：API Key + 手机 App 内聊天（OpenAI 兼容 / Dify 双后端）**
+  - **客户端**：MaaMeow 手机 App 内置「AI 对话」界面
+  - **OpenAI 兼容（默认）**：设置里直接填 Base URL + API Key + 模型名（默认 `https://api.deepseek.com/v1` / `deepseek-chat`），手机直连服务商，无需自建服务端；DeepSeek / OpenAI / Kimi / SiliconFlow / Ollama 同一协议
+  - **Dify（可选）**：家庭 NAS/PC 运行 Dify 容器，在 Dify 填入你的 DeepSeek/OpenAI API Key 并挂载明日方舟知识库
+
+详细实现与本地验证见：[应用内对话：OpenAI 兼容 / Dify 双后端](hand/in_app_chat.md)。
 
 详细图文与配置步骤详见：[AI 订阅与 API Key 接入完全指南](client/external_clients.md)。
 
@@ -116,11 +119,12 @@ MaaMeow 是一款原生运行于 Android 系统的明日方舟日常自动化伴
 | **手侧实现 (The Hand)** | [20 项 MCP 工具规范与 Schema](hand/mcp_tools.md) | 20 项标准工具参数、自动生成 Schema、成功与错误返回格式 |
 | | [服务生命周期与安全模型](hand/service_and_security.md) | `AiControlService` 运行逻辑、Token 鉴权、网络策略与日志脱敏 |
 | | [定时任务、自动唤醒与自启机制](hand/scheduled_tasks.md) | 硬件精确闹钟自启、WakeUnlockEngine 亮屏解锁、虚拟屏免打扰、异常守护看门狗 |
+| | [应用内对话：OpenAI 兼容 / Dify 双后端](hand/in_app_chat.md) | 两个 SSE 客户端、`ai_chat_provider` 等设置键与默认值、错误映射、本地 mock + `adb reverse` 验证 |
 | **脑侧与评测 (The Brain)** | [明日方舟专用 RAG 语料库](brain/rag_knowledge_base.md) | 实体级分块策略、`build_rag_corpus.py` 工作机制与向量化配置 |
 | | [实体校验与防幻觉设计](brain/anti_hallucination.md) | `ArknightsEntityValidator`、稳定 ID 校验与 Levenshtein 候选推荐 |
 | | [32 题基准评测体系](brain/evaluation_benchmark.md) | 32 题评测集、Top-1 100% 召回率与 7 道陷阱题 100% 拦截率 |
 | **脚本互通** | [任务录制与配置回放](scripting/script_recorder.md) | `AiScriptRecorder`、参数快照与 `ConfigBackupManager` 零差互通证明 |
-| **客户端集成** | [应用内 Compose 聊天客户端](client/in_app_chat.md) | SSE 流式解析器、工具卡片组件与中止生成机制 |
+| **客户端集成** | [应用内 Compose 聊天客户端](client/in_app_chat.md) | Dify 后端 SSE 事件、工具卡片组件与中止生成机制 |
 | | [AI 订阅与 API Key 接入指南](client/external_clients.md) | Claude Pro 订阅、Cherry Studio + DeepSeek/OpenAI API Key、Dify 接入教程 |
 
 ---

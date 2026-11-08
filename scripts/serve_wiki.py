@@ -70,6 +70,7 @@ def run_self_test(host: str, port: int) -> bool:
         "/hand/mcp_tools.md",
         "/hand/service_and_security.md",
         "/hand/scheduled_tasks.md",
+        "/hand/in_app_chat.md",
         "/brain/rag_knowledge_base.md",
         "/brain/anti_hallucination.md",
         "/brain/evaluation_benchmark.md",
