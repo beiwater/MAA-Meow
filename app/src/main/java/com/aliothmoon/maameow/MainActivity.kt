@@ -22,6 +22,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withStarted
+import com.aliothmoon.maameow.ai.AiChatImportRelay
+import com.aliothmoon.maameow.ai.ChatConfigImport
+import com.aliothmoon.maameow.ai.ChatConfigImportResult
 import com.aliothmoon.maameow.data.achievement.AchievementEvents
 import com.aliothmoon.maameow.data.achievement.AchievementRepository
 import com.aliothmoon.maameow.data.achievement.PallasDrunkState
@@ -57,9 +60,13 @@ class MainActivity : AppCompatActivity(), PipHost {
 
     private companion object {
         const val STATE_LAUNCH_DISPATCHED = "launch_dispatched"
+        const val STATE_AI_IMPORT_DISPATCHED = "ai_import_dispatched"
     }
 
     private var launchDispatched = false
+
+    /** 深链只消费一次，重建 Activity（切语言/主题）时不再重复导入 */
+    private var aiImportDispatched = false
 
     @Volatile
     private var isUiReady: Boolean = false
@@ -73,6 +80,7 @@ class MainActivity : AppCompatActivity(), PipHost {
     private val _isInPictureInPicture = MutableStateFlow(false)
     override val isInPictureInPicture: StateFlow<Boolean> = _isInPictureInPicture.asStateFlow()
 
+    private val aiChatImportRelay: AiChatImportRelay by inject()
     private val appSettingsManager: AppSettingsManager by inject()
     private val achievementRepository: AchievementRepository by inject()
     private val compositionService: MaaCompositionService by inject()
@@ -89,10 +97,12 @@ class MainActivity : AppCompatActivity(), PipHost {
             Timber.i("isEyeProtectionEnabled: %s (source=%s)", eyeProtection.isEnabled, eyeProtection.source)
         }
         launchDispatched = savedInstanceState?.getBoolean(STATE_LAUNCH_DISPATCHED) ?: false
+        aiImportDispatched = savedInstanceState?.getBoolean(STATE_AI_IMPORT_DISPATCHED) ?: false
         if (!launchDispatched) dispatchScheduledLaunchIntent(intent)
         enableEdgeToEdge()
         lifecycleScope.launch {
             (application as MaaApplication).awaitReady()
+            dispatchAiChatImportIntent(intent)
             initializeUi()
         }
     }
@@ -151,12 +161,15 @@ class MainActivity : AppCompatActivity(), PipHost {
         super.onNewIntent(intent)
         setIntent(intent)
         launchDispatched = false
+        aiImportDispatched = false
         dispatchScheduledLaunchIntent(intent)
+        dispatchAiChatImportIntent(intent)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         // 异步恢复语言和主题可能重建 Activity，已消费的请求不能再执行
         outState.putBoolean(STATE_LAUNCH_DISPATCHED, launchDispatched)
+        outState.putBoolean(STATE_AI_IMPORT_DISPATCHED, aiImportDispatched)
         super.onSaveInstanceState(outState)
     }
 
@@ -173,6 +186,21 @@ class MainActivity : AppCompatActivity(), PipHost {
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         _isInPictureInPicture.value = isInPictureInPictureMode
+    }
+
+    /**
+     * `maameow://ai-import?…`：只把 URI 交给设置页导入，不自动发消息、不启动 AI 服务。
+     * 解析不出可用配置时静默忽略（既不跳页也不打扰），绝不把密钥写进日志。
+     */
+    private fun dispatchAiChatImportIntent(intent: Intent?) {
+        if (aiImportDispatched) return
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val data = intent.data ?: return
+        if (!data.scheme.equals(ChatConfigImport.SCHEME, ignoreCase = true)) return
+        if (!data.host.equals(ChatConfigImport.HOST, ignoreCase = true)) return
+        if (ChatConfigImport.parse(data.toString()) !is ChatConfigImportResult.Success) return
+        aiChatImportRelay.offer(data.toString())
+        aiImportDispatched = true
     }
 
     private fun dispatchScheduledLaunchIntent(intent: Intent?) {

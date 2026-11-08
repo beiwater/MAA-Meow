@@ -6,9 +6,11 @@ import android.os.PowerManager
 import android.view.Display
 import com.aliothmoon.maameow.R
 import com.aliothmoon.maameow.announcement.AnnouncementManager
+import com.aliothmoon.maameow.ai.AiChatImportRelay
 import com.aliothmoon.maameow.ai.AiScriptRecorder
 import com.aliothmoon.maameow.ai.AndroidMaaToolBridge
 import com.aliothmoon.maameow.ai.DifyChatClient
+import com.aliothmoon.maameow.ai.OpenAiCompatibleChatClient
 import com.aliothmoon.maameow.ai.mcp.MaaToolBridge
 import com.aliothmoon.maameow.data.achievement.AchievementRepository
 import com.aliothmoon.maameow.data.achievement.PallasDrunkState
@@ -200,6 +202,7 @@ val appModule = module {
     singleOf(::PermissionManager)
     singleOf(::ShizukuReadinessProvider)
     singleOf(::MainTabNavigator)
+    singleOf(::AiChatImportRelay)
     singleOf(::SettingSearchNavigator)
 
 
@@ -432,9 +435,10 @@ val appModule = module {
     singleOf(::ApplicationLogWriter)
     singleOf(::LogTreeHolder)
 
-    // AI 控制 (薄 MCP 桥接 + 脚本录制 + Dify 薄客户端；懒加载，关闭时零开销)
+    // AI 控制 (薄 MCP 桥接 + 脚本录制 + Dify/OpenAI 兼容薄客户端；懒加载，关闭时零开销)
     singleOf(::AiScriptRecorder)
     singleOf(::DifyChatClient)
+    singleOf(::OpenAiCompatibleChatClient)
     single<MaaToolBridge> {
         AndroidMaaToolBridge(
             context = androidContext(),

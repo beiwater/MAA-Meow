@@ -1,6 +1,7 @@
 package com.aliothmoon.maameow.presentation.view.settings
 
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +34,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,20 +49,26 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.aliothmoon.maameow.R
-import com.aliothmoon.maameow.constant.Routes
+import com.aliothmoon.maameow.ai.AiChatImportRelay
+import com.aliothmoon.maameow.domain.models.AiChatProvider
 import com.aliothmoon.maameow.presentation.components.ListItemDivider
 import com.aliothmoon.maameow.presentation.components.SettingsGroupCard
 import com.aliothmoon.maameow.presentation.components.TopAppBar
+import com.aliothmoon.maameow.presentation.navigation.BottomNavTab
+import com.aliothmoon.maameow.presentation.navigation.MainTabNavigator
 import com.aliothmoon.maameow.presentation.viewmodel.AiControlViewModel
 import com.aliothmoon.maameow.theme.MaaDesignTokens
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
 
 @Composable
 fun AiControlSettingsView(
     navController: NavController,
     viewModel: AiControlViewModel = koinViewModel(),
+    mainTabNavigator: MainTabNavigator = koinInject(),
 ) {
     val context = LocalContext.current
+    val importRelay: AiChatImportRelay = koinInject()
     val enabled by viewModel.aiControlEnabled.collectAsStateWithLifecycle()
     val port by viewModel.aiMcpPort.collectAsStateWithLifecycle()
     val lanEnabled by viewModel.aiMcpLanEnabled.collectAsStateWithLifecycle()
@@ -67,6 +76,10 @@ fun AiControlSettingsView(
     val screenshotEnabled by viewModel.aiScreenshotEnabled.collectAsStateWithLifecycle()
     val difyBaseUrl by viewModel.aiDifyBaseUrl.collectAsStateWithLifecycle()
     val difyApiKey by viewModel.aiDifyApiKey.collectAsStateWithLifecycle()
+    val chatProvider by viewModel.aiChatProvider.collectAsStateWithLifecycle()
+    val openAiBaseUrl by viewModel.aiOpenAiBaseUrl.collectAsStateWithLifecycle()
+    val openAiApiKey by viewModel.aiOpenAiApiKey.collectAsStateWithLifecycle()
+    val openAiModel by viewModel.aiOpenAiModel.collectAsStateWithLifecycle()
     val runningEndpoint by viewModel.runningEndpoint.collectAsStateWithLifecycle()
     val isRecording by viewModel.isRecordingScript.collectAsStateWithLifecycle()
     val draftNodes by viewModel.recordedDraftNodes.collectAsStateWithLifecycle()
@@ -74,8 +87,27 @@ fun AiControlSettingsView(
     var portText by remember(port) { mutableStateOf(port.toString()) }
     var urlText by remember(difyBaseUrl) { mutableStateOf(difyBaseUrl) }
     var apiKeyText by remember(difyApiKey) { mutableStateOf(difyApiKey) }
+    var openAiUrlText by remember(openAiBaseUrl) { mutableStateOf(openAiBaseUrl) }
+    var openAiKeyText by remember(openAiApiKey) { mutableStateOf(openAiApiKey) }
+    var openAiModelText by remember(openAiModel) { mutableStateOf(openAiModel) }
+    var importText by remember { mutableStateOf("") }
     var scriptNameText by remember { mutableStateOf("AI-录制脚本") }
     var showLanConfirmDialog by remember { mutableStateOf(false) }
+
+    // 深链把 URI 放进 relay，这里取出交给同一套导入路径（服务关着也能导入）
+    val pendingImport by importRelay.request.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingImport) {
+        val uri = importRelay.consume() ?: return@LaunchedEffect
+        viewModel.importChatConfig(uri)
+    }
+
+    val importNotice by viewModel.chatImportNotice.collectAsStateWithLifecycle()
+    LaunchedEffect(importNotice) {
+        val notice = importNotice ?: return@LaunchedEffect
+        Toast.makeText(context, notice.message, Toast.LENGTH_SHORT).show()
+        if (notice.success) importText = ""
+        viewModel.clearChatImportNotice()
+    }
 
     if (showLanConfirmDialog) {
         AlertDialog(
@@ -107,11 +139,13 @@ fun AiControlSettingsView(
                 navigationIcon = Icons.AutoMirrored.Filled.ArrowBack,
                 onNavigationClick = { navController.navigateUp() },
                 actions = {
-                    IconButton(onClick = { navController.navigate(Routes.AI_CHAT) }) {
-                        Icon(
-                            imageVector = Icons.Rounded.Chat,
-                            contentDescription = stringResource(R.string.ai_chat_title),
-                        )
+                    if (enabled) {
+                        IconButton(onClick = { mainTabNavigator.navigateTo(BottomNavTab.AI) }) {
+                            Icon(
+                                imageVector = Icons.Rounded.Chat,
+                                contentDescription = stringResource(R.string.ai_chat_title),
+                            )
+                        }
                     }
                 },
             )
@@ -327,7 +361,7 @@ fun AiControlSettingsView(
                 }
             }
 
-            // §5 Dify Chat API settings
+            // §5 从链接或 JSON 导入：一键填好下面的对话配置
             item {
                 SettingsGroupCard {
                     Column(
@@ -337,36 +371,157 @@ fun AiControlSettingsView(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(
-                            text = stringResource(R.string.ai_settings_dify_section_title),
+                            text = stringResource(R.string.ai_settings_import_title),
                             style = MaterialTheme.typography.titleSmall,
                         )
                         OutlinedTextField(
-                            value = urlText,
-                            onValueChange = {
-                                urlText = it
-                                viewModel.setAiDifyBaseUrl(it)
-                            },
-                            label = { Text(stringResource(R.string.ai_settings_dify_url_label)) },
+                            value = importText,
+                            onValueChange = { importText = it },
+                            label = { Text(stringResource(R.string.ai_settings_import_label)) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        OutlinedTextField(
-                            value = apiKeyText,
-                            onValueChange = {
-                                apiKeyText = it
-                                viewModel.setAiDifyApiKey(it)
-                            },
-                            label = { Text(stringResource(R.string.ai_settings_dify_key_label)) },
-                            visualTransformation = PasswordVisualTransformation(),
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    val pasted = readClipboardText(context)
+                                    if (pasted == null) {
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.ai_settings_import_clipboard_empty),
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    } else {
+                                        importText = pasted
+                                        viewModel.importChatConfig(pasted)
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(stringResource(R.string.ai_settings_import_paste_btn))
+                            }
+                            Button(
+                                onClick = { viewModel.importChatConfig(importText) },
+                                enabled = importText.isNotBlank(),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(stringResource(R.string.ai_settings_import_btn))
+                            }
+                        }
+                        Text(
+                            text = stringResource(R.string.ai_settings_import_helper),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                }
+            }
+
+            // §5 Chat provider (OpenAI 兼容 / Dify 应用 API)
+            item {
+                SettingsGroupCard {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = MaaDesignTokens.Spacing.sm),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.ai_settings_chat_provider_title),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = chatProvider == AiChatProvider.OPENAI,
+                                onClick = { viewModel.setAiChatProvider(AiChatProvider.OPENAI) },
+                                label = {
+                                    Text(stringResource(R.string.ai_settings_chat_provider_openai))
+                                },
+                            )
+                            FilterChip(
+                                selected = chatProvider == AiChatProvider.DIFY,
+                                onClick = { viewModel.setAiChatProvider(AiChatProvider.DIFY) },
+                                label = {
+                                    Text(stringResource(R.string.ai_settings_chat_provider_dify))
+                                },
+                            )
+                        }
+
+                        when (chatProvider) {
+                            AiChatProvider.OPENAI -> {
+                                OutlinedTextField(
+                                    value = openAiUrlText,
+                                    onValueChange = {
+                                        openAiUrlText = it
+                                        viewModel.setAiOpenAiBaseUrl(it)
+                                    },
+                                    label = {
+                                        Text(stringResource(R.string.ai_settings_openai_url_label))
+                                    },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                OutlinedTextField(
+                                    value = openAiModelText,
+                                    onValueChange = {
+                                        openAiModelText = it
+                                        viewModel.setAiOpenAiModel(it)
+                                    },
+                                    label = {
+                                        Text(stringResource(R.string.ai_settings_openai_model_label))
+                                    },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                OutlinedTextField(
+                                    value = openAiKeyText,
+                                    onValueChange = {
+                                        openAiKeyText = it
+                                        viewModel.setAiOpenAiApiKey(it)
+                                    },
+                                    label = {
+                                        Text(stringResource(R.string.ai_settings_openai_key_label))
+                                    },
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+
+                            AiChatProvider.DIFY -> {
+                                OutlinedTextField(
+                                    value = urlText,
+                                    onValueChange = {
+                                        urlText = it
+                                        viewModel.setAiDifyBaseUrl(it)
+                                    },
+                                    label = { Text(stringResource(R.string.ai_settings_dify_url_label)) },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                OutlinedTextField(
+                                    value = apiKeyText,
+                                    onValueChange = {
+                                        apiKeyText = it
+                                        viewModel.setAiDifyApiKey(it)
+                                    },
+                                    label = { Text(stringResource(R.string.ai_settings_dify_key_label)) },
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
+
                         Spacer(modifier = Modifier.height(4.dp))
-                        Button(
-                            onClick = { navController.navigate(Routes.AI_CHAT) },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(stringResource(R.string.ai_settings_open_chat_btn))
+                        if (enabled) {
+                            Button(
+                                onClick = { mainTabNavigator.navigateTo(BottomNavTab.AI) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(stringResource(R.string.ai_settings_open_chat_btn))
+                            }
                         }
                     }
                 }
@@ -374,3 +529,20 @@ fun AiControlSettingsView(
         }
     }
 }
+
+/**
+ * 读剪贴板：主剪贴可能为 null、条目可能不是文本、读取也可能被系统拒绝，
+ * 任何一步失败都当作「没有可导入的文本」，不让导入流程崩。
+ */
+private fun readClipboardText(context: Context): String? = runCatching {
+    val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    val clip = manager?.primaryClip
+    if (clip == null || clip.itemCount == 0) return@runCatching null
+    val description = clip.description
+    val isText = description.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) ||
+        description.hasMimeType(ClipDescription.MIMETYPE_TEXT_HTML) ||
+        description.hasMimeType(ClipDescription.MIMETYPE_TEXT_URILIST) ||
+        description.hasMimeType("text/*")
+    if (!isText) return@runCatching null
+    clip.getItemAt(0).text?.toString()
+}.getOrNull()?.takeIf { it.isNotBlank() }
