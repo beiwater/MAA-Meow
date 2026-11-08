@@ -1,6 +1,7 @@
 package com.aliothmoon.maameow.koin
 
 import com.aliothmoon.maameow.presentation.viewmodel.AchievementViewModel
+import com.aliothmoon.maameow.presentation.viewmodel.AiControlViewModel
 import com.aliothmoon.maameow.presentation.viewmodel.AppEventsViewModel
 import com.aliothmoon.maameow.presentation.viewmodel.BackgroundTaskViewModel
 import com.aliothmoon.maameow.presentation.viewmodel.CopilotSearchViewModel
@@ -40,6 +41,7 @@ val viewModelModule = module {
     viewModelOf(::ScheduleAppBlacklistViewModel)
     viewModelOf(::NotificationSettingsViewModel)
     viewModelOf(::TaskOverrideEditorViewModel)
+    viewModelOf(::AiControlViewModel)
 }
 
 

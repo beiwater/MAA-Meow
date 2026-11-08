@@ -887,6 +887,16 @@ fun SettingsView(
                                     navController.navigate(Routes.GAME_PACKAGE)
                                 }
                             }
+                            ListItemDivider()
+                            SettingSearchTarget(R.string.ai_settings_title) {
+                                SettingClickItem(
+                                    title = stringResource(R.string.ai_settings_title),
+                                    description = stringResource(R.string.ai_settings_entry_desc),
+                                    contentColor = contentColor
+                                ) {
+                                    navController.navigate(Routes.AI_CONTROL)
+                                }
+                            }
                         }
                     }
                 }

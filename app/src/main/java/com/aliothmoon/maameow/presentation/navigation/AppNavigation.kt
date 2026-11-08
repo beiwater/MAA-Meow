@@ -60,6 +60,8 @@ import com.aliothmoon.maameow.presentation.view.settings.LogHistoryView
 import com.aliothmoon.maameow.presentation.view.settings.LiveUpdateSettingsView
 import com.aliothmoon.maameow.presentation.view.settings.TaskOverrideEditorView
 import com.aliothmoon.maameow.presentation.view.settings.WallpaperSettingsView
+import com.aliothmoon.maameow.presentation.view.settings.AiChatView
+import com.aliothmoon.maameow.presentation.view.settings.AiControlSettingsView
 import com.aliothmoon.maameow.presentation.viewmodel.AppEventsViewModel
 import com.aliothmoon.maameow.presentation.viewmodel.BackgroundTaskViewModel
 import com.aliothmoon.maameow.schedule.model.CountdownState
@@ -278,6 +280,12 @@ fun AppNavigation(
                     }
                     composable(Routes.GAME_PACKAGE) {
                         GamePackageSettingsView(navController = navController)
+                    }
+                    composable(Routes.AI_CONTROL) {
+                        AiControlSettingsView(navController = navController)
+                    }
+                    composable(Routes.AI_CHAT) {
+                        AiChatView(navController = navController)
                     }
                 }
             }
