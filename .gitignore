@@ -39,6 +39,8 @@ __pycache__/
 # MAA Core download cache
 .maa-cache/
 # MAA Core deployed version (written by scripts/setup_maa_core.py)
+# RAG corpus cache (server-side only, never in APK)
+.rag-cache/
 .maaversion
 
 # App Build
