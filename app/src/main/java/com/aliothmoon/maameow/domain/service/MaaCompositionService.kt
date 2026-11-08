@@ -178,6 +178,7 @@ class MaaCompositionService(
     private val callbackDispatcher: MaaCallbackDispatcher by inject(MaaCallbackDispatcher::class.java)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val aiScriptRecorder: com.aliothmoon.maameow.ai.AiScriptRecorder by inject(com.aliothmoon.maameow.ai.AiScriptRecorder::class.java)
 
     // 虚拟屏归建它的特权进程，进程一换就没了
     private class BackgroundGame(val binder: IBinder, val packageName: String)
@@ -819,6 +820,7 @@ class MaaCompositionService(
         // 凭这行能从会话日志找到遥测里的那一轮
         telemetry.onRunStarted(kind, tasks)?.let { sessionLogger.appendToFileOnly("[Telemetry] run_id=$it") }
         subTaskHandler.resetSessionState()
+        aiScriptRecorder.onRunStarted(tasks, taskChainState.chain.value)
         toolboxResultCollector.onSessionStart()
         onSessionStarted?.invoke()
         sessionLogger.appendAndWait(startMessage, LogLevel.INFO)

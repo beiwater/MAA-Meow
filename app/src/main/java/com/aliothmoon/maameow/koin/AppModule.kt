@@ -6,6 +6,10 @@ import android.os.PowerManager
 import android.view.Display
 import com.aliothmoon.maameow.R
 import com.aliothmoon.maameow.announcement.AnnouncementManager
+import com.aliothmoon.maameow.ai.AiScriptRecorder
+import com.aliothmoon.maameow.ai.AndroidMaaToolBridge
+import com.aliothmoon.maameow.ai.DifyChatClient
+import com.aliothmoon.maameow.ai.mcp.MaaToolBridge
 import com.aliothmoon.maameow.data.achievement.AchievementRepository
 import com.aliothmoon.maameow.data.achievement.PallasDrunkState
 import com.aliothmoon.maameow.data.api.CopilotApiService
@@ -428,5 +432,29 @@ val appModule = module {
     singleOf(::ApplicationLogWriter)
     singleOf(::LogTreeHolder)
 
+    // AI 控制 (薄 MCP 桥接 + 脚本录制 + Dify 薄客户端；懒加载，关闭时零开销)
+    singleOf(::AiScriptRecorder)
+    singleOf(::DifyChatClient)
+    single<MaaToolBridge> {
+        AndroidMaaToolBridge(
+            context = androidContext(),
+            compositionService = get(),
+            statusTracker = get(),
+            taskChainState = get(),
+            startTaskChainUseCase = get(),
+            sessionLogger = get(),
+            frameSnapshotter = get(),
+            copilotManager = get(),
+            copilotRepository = get(),
+            resourceDataManager = get(),
+            itemHelper = get(),
+            pathConfig = get(),
+            appSettings = get(),
+            scriptRecorder = get(),
+            httpClient = get(),
+            operBoxRepository = get(),
+            depotRepository = get(),
+        )
+    }
     // 前台模式自动任务
 }

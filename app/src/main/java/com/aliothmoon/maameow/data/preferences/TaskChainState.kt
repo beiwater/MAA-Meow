@@ -460,6 +460,43 @@ class TaskChainState(
         Timber.d("Created profile: %s (%s)", newProfile.name, newProfile.id)
         return newProfile.id
     }
+    suspend fun saveOrUpdateCustomProfile(
+        profileId: String?,
+        name: String,
+        chain: List<TaskChainNode>,
+        switchToNew: Boolean = false,
+    ): TaskProfile {
+        _isLoaded.first { it }
+        val reindexedChain = chain.mapIndexed { idx, node -> node.copy(order = idx) }
+        val trimmedName = name.trim().take(MAX_PROFILE_NAME_LENGTH).ifEmpty { "AI-配置" }
+        val savedProfiles = _profiles.value.map { p ->
+            if (p.id == _profileId.value) p.copy(chain = _chain.value) else p
+        }
+        val existingIndex = profileId?.let { id -> savedProfiles.indexOfFirst { it.id == id } } ?: -1
+        val targetProfile = if (existingIndex >= 0) {
+            val prev = savedProfiles[existingIndex]
+            prev.copy(name = trimmedName, chain = reindexedChain)
+        } else {
+            TaskProfile(
+                id = profileId?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString(),
+                name = trimmedName,
+                chain = reindexedChain,
+            )
+        }
+        val updatedProfiles = if (existingIndex >= 0) {
+            savedProfiles.toMutableList().apply { set(existingIndex, targetProfile) }
+        } else {
+            savedProfiles + targetProfile
+        }
+        _profiles.value = updatedProfiles
+        if (switchToNew || _profileId.value == targetProfile.id) {
+            _profileId.value = targetProfile.id
+            _chain.value = targetProfile.chain
+        }
+        doSync()
+        flush()
+        return targetProfile
+    }
 
     suspend fun removeProfile(profileId: String) {
         val currentProfiles = _profiles.value

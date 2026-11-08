@@ -16,6 +16,8 @@ object AppSettingsSnapshot {
         "yituliuOpenApiToken",
         "penguinId",
         "customBackgroundToken",
+        "aiMcpBearerToken",
+        "aiDifyApiKey",
     )
 
     private val OMITTED = setOf(

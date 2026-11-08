@@ -276,4 +276,32 @@ data class AppSettings(
     @PrefKey(default = "false")
     val pallasHangover: String = "false",
 
+    // ───────────────── AI 控制 (MCP Server + Dify) ─────────────────
+
+    @PrefKey(default = "false")
+    val aiControlEnabled: String = "false",
+
+    @PrefKey(default = "18080")
+    val aiMcpPort: String = "18080",
+
+    @PrefKey(default = "false")
+    val aiMcpLanEnabled: String = "false",
+
+    @PrefKey(default = "")
+    val aiMcpBearerToken: String = "",
+
+    @PrefKey(default = "false")
+    val aiScreenshotEnabled: String = "false",
+
+    @PrefKey(default = "http://127.0.0.1/v1")
+    val aiDifyBaseUrl: String = "http://127.0.0.1/v1",
+
+    @PrefKey(default = "")
+    val aiDifyApiKey: String = "",
+
+    @PrefKey(default = "")
+    val aiDifyUser: String = "",
+
+    @PrefKey(default = "false")
+    val aiScriptRecordEnabled: String = "false",
     )

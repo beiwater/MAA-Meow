@@ -951,6 +951,106 @@ class AppSettingsManager internal constructor(
         return config.copy(mode = config.sanitizedMode())
     }
 
+    // ───────────────── AI 控制设置 ─────────────────
+
+    val aiControlEnabled: StateFlow<Boolean> =
+        setting { it.aiControlEnabled.toBooleanStrictOrNull() ?: false }
+
+    suspend fun setAiControlEnabled(enabled: Boolean) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit {
+                it[aiControlEnabled] = enabled.toString()
+                if (enabled && it[aiMcpBearerToken].isNullOrBlank()) {
+                    it[aiMcpBearerToken] = java.util.UUID.randomUUID().toString().replace("-", "")
+                }
+                if (enabled) {
+                    // 开启 AI 控制时关闭自动更新，防止被上游官方包覆盖
+                    it[autoCheckUpdate] = "false"
+                    it[autoDownloadUpdate] = "false"
+                }
+            }
+        }
+    }
+
+    val aiMcpPort: StateFlow<Int> =
+        setting { (it.aiMcpPort.toIntOrNull() ?: 18080).coerceIn(1024, 65535) }
+
+    suspend fun setAiMcpPort(port: Int) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiMcpPort] = port.coerceIn(1024, 65535).toString() }
+        }
+    }
+
+    val aiMcpLanEnabled: StateFlow<Boolean> =
+        setting { it.aiMcpLanEnabled.toBooleanStrictOrNull() ?: false }
+
+    suspend fun setAiMcpLanEnabled(enabled: Boolean) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiMcpLanEnabled] = enabled.toString() }
+        }
+    }
+
+    val aiMcpBearerToken: StateFlow<String> = setting { it.aiMcpBearerToken }
+
+    suspend fun setAiMcpBearerToken(token: String) {
+        val trimmed = token.trim()
+        if (trimmed.isNotEmpty()) {
+            with(AppSettingsSchema) {
+                context.dataStore.edit { it[aiMcpBearerToken] = trimmed }
+            }
+        }
+    }
+
+    suspend fun regenerateAiMcpBearerToken(): String {
+        val newToken = java.util.UUID.randomUUID().toString().replace("-", "")
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiMcpBearerToken] = newToken }
+        }
+        return newToken
+    }
+
+    val aiScreenshotEnabled: StateFlow<Boolean> =
+        setting { it.aiScreenshotEnabled.toBooleanStrictOrNull() ?: false }
+
+    suspend fun setAiScreenshotEnabled(enabled: Boolean) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiScreenshotEnabled] = enabled.toString() }
+        }
+    }
+
+    val aiDifyBaseUrl: StateFlow<String> = setting { it.aiDifyBaseUrl.ifBlank { "http://127.0.0.1/v1" } }
+
+    suspend fun setAiDifyBaseUrl(url: String) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiDifyBaseUrl] = url.trim().trimEnd('/') }
+        }
+    }
+
+    val aiDifyApiKey: StateFlow<String> = setting { it.aiDifyApiKey }
+
+    suspend fun setAiDifyApiKey(apiKey: String) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiDifyApiKey] = apiKey.trim() }
+        }
+    }
+
+    val aiDifyUser: StateFlow<String> = setting { it.aiDifyUser.ifBlank { "maameow-user" } }
+
+    suspend fun setAiDifyUser(user: String) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiDifyUser] = user.trim() }
+        }
+    }
+
+    val aiScriptRecordEnabled: StateFlow<Boolean> =
+        setting { it.aiScriptRecordEnabled.toBooleanStrictOrNull() ?: false }
+
+    suspend fun setAiScriptRecordEnabled(enabled: Boolean) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiScriptRecordEnabled] = enabled.toString() }
+        }
+    }
+
     // 放在类体末尾，启动收集器时 setting() 已全部注册
     init {
         // 单次收集统一更新，避免就绪标记早于各字段的 stateIn

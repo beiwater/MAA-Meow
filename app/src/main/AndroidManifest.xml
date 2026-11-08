@@ -163,6 +163,17 @@
                 android:value="Background MAA task execution progress notification" />
         </service>
 
+        <!-- AI 控制 MCP 前台服务（默认关闭，仅在用户开启 AI 控制时启动） -->
+        <service
+            android:name=".ai.AiControlService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            tools:ignore="ForegroundServicePermission">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Local MCP HTTP server for AI control of MAA tasks" />
+        </service>
+
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
             android:authorities="${applicationId}.shizuku"
