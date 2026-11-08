@@ -7,6 +7,17 @@ import kotlinx.serialization.Serializable
 
 enum class VirtualDisplayBackend { LEGACY, VDM }
 
+/** 应用内对话使用的后端：Dify 应用 API / OpenAI 兼容 `/chat/completions` */
+enum class AiChatProvider {
+    DIFY,
+    OPENAI;
+
+    companion object {
+        fun parse(raw: String): AiChatProvider =
+            runCatching { valueOf(raw.trim().uppercase()) }.getOrDefault(OPENAI)
+    }
+}
+
 @Serializable
 @PrefSchema
 data class AppSettings(
@@ -292,6 +303,19 @@ data class AppSettings(
 
     @PrefKey(default = "false")
     val aiScreenshotEnabled: String = "false",
+
+    /** 对话后端，见 [AiChatProvider] */
+    @PrefKey(name = "ai_chat_provider", default = "OPENAI")
+    val aiChatProvider: String = "OPENAI",
+
+    @PrefKey(name = "ai_openai_base_url", default = "https://api.deepseek.com/v1")
+    val aiOpenAiBaseUrl: String = "https://api.deepseek.com/v1",
+
+    @PrefKey(name = "ai_openai_api_key", default = "")
+    val aiOpenAiApiKey: String = "",
+
+    @PrefKey(name = "ai_openai_model", default = "deepseek-chat")
+    val aiOpenAiModel: String = "deepseek-chat",
 
     @PrefKey(default = "http://127.0.0.1/v1")
     val aiDifyBaseUrl: String = "http://127.0.0.1/v1",

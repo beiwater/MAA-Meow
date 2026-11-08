@@ -40,6 +40,12 @@ data class AiChatMessage(
     val isStreaming: Boolean = false,
     val isError: Boolean = false,
     val toolCalls: List<AiToolCallCard> = emptyList(),
+    /** 推理模型的思维链；只在气泡上方以可折叠标题展示，绝不混进正文 */
+    val thinking: String = "",
+    /** 原始错误文本（异常/HTTP 体），UI 以小字附在友好提示下方 */
+    val errorDetail: String? = null,
+    /** 该错误可通过「去设置」跳转 AI 控制页补配置 */
+    val errorNeedsSetup: Boolean = false,
 )
 
 sealed interface DifyStreamEvent {
@@ -48,7 +54,13 @@ sealed interface DifyStreamEvent {
     data class ToolCallStarted(val id: String, val toolName: String, val toolInput: String) : DifyStreamEvent
     data class ToolCallFinished(val id: String, val toolName: String, val toolInput: String, val observation: String) : DifyStreamEvent
     data class Completed(val messageId: String, val conversationId: String) : DifyStreamEvent
-    data class Error(val message: String) : DifyStreamEvent
+    data class Error(
+        val message: String,
+        val kind: ChatErrorKind = ChatErrorKind.UNKNOWN,
+        val host: String = "",
+        val port: Int = -1,
+        val httpCode: Int = 0,
+    ) : DifyStreamEvent
 }
 
 /**
@@ -96,10 +108,19 @@ class DifyChatClient(
             .build()
 
         val call = httpClient.newCall(request)
+        val host = request.url.host
+        val port = request.url.port
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 if (!call.isCanceled()) {
-                    trySend(DifyStreamEvent.Error(e.message ?: "Network error"))
+                    trySend(
+                        DifyStreamEvent.Error(
+                            message = e.message ?: "Network error",
+                            kind = ChatErrorKind.NETWORK,
+                            host = host,
+                            port = port,
+                        ),
+                    )
                 }
                 close()
             }
@@ -108,13 +129,28 @@ class DifyChatClient(
                 response.use { resp ->
                     if (!resp.isSuccessful) {
                         val errBody = runCatching { resp.body?.string().orEmpty() }.getOrDefault("")
-                        trySend(DifyStreamEvent.Error("HTTP ${resp.code}: ${errBody.take(300)}"))
+                        trySend(
+                            DifyStreamEvent.Error(
+                                message = "HTTP ${resp.code}: ${errBody.take(500)}",
+                                kind = classifyHttpStatus(resp.code),
+                                host = host,
+                                port = port,
+                                httpCode = resp.code,
+                            ),
+                        )
                         close()
                         return
                     }
                     val source = resp.body?.source()
                     if (source == null) {
-                        trySend(DifyStreamEvent.Error("Empty response stream"))
+                        trySend(
+                            DifyStreamEvent.Error(
+                                message = "Empty response stream",
+                                kind = ChatErrorKind.UNKNOWN,
+                                host = host,
+                                port = port,
+                            ),
+                        )
                         close()
                         return
                     }
@@ -130,7 +166,14 @@ class DifyChatClient(
                         }
                     } catch (e: Exception) {
                         if (!call.isCanceled()) {
-                            trySend(DifyStreamEvent.Error(e.message ?: "Stream interrupted"))
+                            trySend(
+                                DifyStreamEvent.Error(
+                                    message = e.message ?: "Stream interrupted",
+                                    kind = ChatErrorKind.UNKNOWN,
+                                    host = host,
+                                    port = port,
+                                ),
+                            )
                         }
                     } finally {
                         close()
@@ -200,7 +243,7 @@ class DifyChatClient(
             "message_end" -> DifyStreamEvent.Completed(messageId, convId)
             "error" -> {
                 val msg = (obj["message"] as? JsonPrimitive)?.contentOrNull ?: "Unknown Dify error"
-                DifyStreamEvent.Error(msg)
+                DifyStreamEvent.Error(msg, kind = ChatErrorKind.PROVIDER)
             }
             else -> {
                 // OpenAI compatible fallback delta (`choices[0].delta.content`)

@@ -21,6 +21,8 @@ import com.aliothmoon.maameow.data.model.update.UpdateChannel
 import com.aliothmoon.maameow.data.model.update.UpdateSource
 import com.aliothmoon.maameow.data.preferences.AppSettingsManager.Companion.FONT_SIZE_SCALE_AUTO
 import com.aliothmoon.maameow.data.resource.ResourceDataManager
+import com.aliothmoon.maameow.ai.OpenAiCompatibleChatClient
+import com.aliothmoon.maameow.domain.models.AiChatProvider
 import com.aliothmoon.maameow.domain.models.AppSettings
 import com.aliothmoon.maameow.domain.models.AppSettingsSchema
 import com.aliothmoon.maameow.domain.models.CoreDataLocation
@@ -1015,6 +1017,62 @@ class AppSettingsManager internal constructor(
     suspend fun setAiScreenshotEnabled(enabled: Boolean) {
         with(AppSettingsSchema) {
             context.dataStore.edit { it[aiScreenshotEnabled] = enabled.toString() }
+        }
+    }
+
+    val aiChatProvider: StateFlow<AiChatProvider> = setting {
+        AiChatProvider.parse(it.aiChatProvider)
+    }
+
+    /**
+     * 展示用目标标签：`DeepSeek · deepseek-chat` / `Dify · <baseUrl>`。
+     * 密钥未填写时为 null，UI 据此展示「未配置」引导。
+     */
+    val aiChatTargetLabel: StateFlow<String?> = setting { s ->
+        when (AiChatProvider.parse(s.aiChatProvider)) {
+            AiChatProvider.OPENAI -> if (s.aiOpenAiApiKey.isBlank()) {
+                null
+            } else {
+                "${OpenAiCompatibleChatClient.vendorLabel(s.aiOpenAiBaseUrl)} · " +
+                    s.aiOpenAiModel.ifBlank { OpenAiCompatibleChatClient.DEFAULT_MODEL }
+            }
+            AiChatProvider.DIFY -> if (s.aiDifyApiKey.isBlank()) {
+                null
+            } else {
+                "Dify · ${s.aiDifyBaseUrl.ifBlank { "http://127.0.0.1/v1" }}"
+            }
+        }
+    }
+
+    suspend fun setAiChatProvider(provider: AiChatProvider) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiChatProvider] = provider.name }
+        }
+    }
+
+    val aiOpenAiBaseUrl: StateFlow<String> =
+        setting { it.aiOpenAiBaseUrl.ifBlank { OpenAiCompatibleChatClient.DEFAULT_BASE_URL } }
+
+    suspend fun setAiOpenAiBaseUrl(url: String) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiOpenAiBaseUrl] = url.trim().trimEnd('/') }
+        }
+    }
+
+    val aiOpenAiApiKey: StateFlow<String> = setting { it.aiOpenAiApiKey }
+
+    suspend fun setAiOpenAiApiKey(apiKey: String) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiOpenAiApiKey] = apiKey.trim() }
+        }
+    }
+
+    val aiOpenAiModel: StateFlow<String> =
+        setting { it.aiOpenAiModel.ifBlank { OpenAiCompatibleChatClient.DEFAULT_MODEL } }
+
+    suspend fun setAiOpenAiModel(model: String) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiOpenAiModel] = model.trim() }
         }
     }
 

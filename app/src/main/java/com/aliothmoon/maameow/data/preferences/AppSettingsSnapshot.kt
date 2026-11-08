@@ -18,6 +18,7 @@ object AppSettingsSnapshot {
         "customBackgroundToken",
         "aiMcpBearerToken",
         "aiDifyApiKey",
+        "aiOpenAiApiKey",
     )
 
     private val OMITTED = setOf(
