@@ -8,6 +8,7 @@ import com.aliothmoon.maameow.ai.mcp.MaaToolSpec
 import com.aliothmoon.maameow.ai.mcp.RunLaunchResultDto
 import com.aliothmoon.maameow.ai.mcp.ScriptSummaryDto
 import com.aliothmoon.maameow.ai.mcp.TaskTypeSpec
+import com.aliothmoon.maameow.utils.JsonUtils
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -152,8 +153,8 @@ class ChatToolLoopTest {
         server: FakeChatServer,
         invoker: suspend (String, String) -> String,
         limitNote: String = "LIMIT",
-        maxRounds: Int = 6,
-        maxCalls: Int = 8,
+        maxRounds: Int = ChatToolLoop.DEFAULT_MAX_ROUNDS,
+        maxCalls: Int = ChatToolLoop.DEFAULT_MAX_CALLS,
     ) = ChatToolLoop(
         client = OpenAiCompatibleChatClient(OkHttpClient()),
         invoker = invoker,
@@ -237,17 +238,35 @@ class ChatToolLoopTest {
         override suspend fun searchWiki(query: String, limit: Int, wiki: String): Result<String> =
             Result.failure(UnsupportedOperationException())
 
-        override suspend fun getUserData(category: String, filter: String?): Result<JsonObject> =
+        override suspend fun getUserData(category: String, filter: String?, refresh: Boolean): Result<JsonObject> =
             Result.failure(UnsupportedOperationException())
 
         override suspend fun getWikiArticle(title: String, wiki: String): Result<String> =
             Result.failure(UnsupportedOperationException())
 
-        override suspend fun click(x: Int, y: Int): Result<Boolean> =
-            Result.failure(UnsupportedOperationException())
+        var clickResult: Result<Boolean> = Result.success(true)
+        override suspend fun click(x: Int, y: Int): Result<Boolean> = clickResult
 
         override suspend fun backToHome(): Result<Boolean> =
             Result.failure(UnsupportedOperationException())
+
+        var lastVisualInstruction: String? = null
+        override suspend fun visualClick(instruction: String): Result<JsonObject> {
+            lastVisualInstruction = instruction
+            return Result.success(
+                buildJsonObject {
+                    put("success", true)
+                    put("x", 640)
+                    put("y", 360)
+                    put("confidence", 0.95f)
+                    put("latency_ms", 120L)
+                    put("message", "Successfully located and clicked '$instruction' at (640, 360)")
+                },
+            )
+        }
+
+        override suspend fun executeUiPlan(plan: JsonObject): Result<JsonObject> =
+            Result.success(JsonObject(emptyMap()))
     }
 
     // ---- 测试 ----
@@ -321,11 +340,71 @@ class ChatToolLoopTest {
 
         assertEquals(ChatLoopResult.LimitReached, result)
         assertTrue("limit note must be appended: $texts", texts.contains("LIMIT"))
-        assertEquals("no tool may run after the limit", 0, invocations)
+        assertEquals("last allowed round must execute requested tool", 1, invocations)
         assertEquals("must not request again", 1, server.requestCount)
 
         server.close()
     }
+    @Test
+    fun `tool loop respects max rounds and does not run round 2 when max rounds is 1`() = runBlocking {
+        val server = FakeChatServer(
+            listOf(
+                toolCallsResponse("maa_status" to "{}"),
+                toolCallsResponse("maa_stop" to "{}"),
+            ),
+        )
+        var invocations = 0
+
+        val result = loop(
+            server = server,
+            invoker = { _, _ ->
+                invocations++
+                "{}"
+            },
+            maxRounds = 1,
+        ).run(
+            request = request(server),
+            onText = {},
+            onThinking = {},
+            onToolCard = { _, _ -> },
+        )
+
+        assertEquals(ChatLoopResult.LimitReached, result)
+        assertEquals("only round 1 tool should execute", 1, invocations)
+        assertEquals("must stop after round limit without querying server again", 1, server.requestCount)
+        server.close()
+    }
+
+    @Test
+    fun `tool loop genuinely executes tools past round 6`() = runBlocking {
+        val responses = (1..7).map {
+            toolCallsResponse("maa_status" to "{}")
+        } + listOf(textResponse("all 7 rounds finished"))
+
+        val server = FakeChatServer(responses)
+        var invocations = 0
+        val texts = mutableListOf<String>()
+
+        val result = loop(
+            server = server,
+            invoker = { _, _ ->
+                invocations++
+                """{"status":"ok"}"""
+            },
+        ).run(
+            request = request(server),
+            onText = { texts += it },
+            onThinking = {},
+            onToolCard = { _, _ -> },
+        )
+
+        assertEquals(ChatLoopResult.Completed, result)
+        assertEquals("must execute all 7 tool rounds beyond old 6-round limit", 7, invocations)
+        assertEquals(8, server.requestCount)
+        assertTrue(texts.contains("all 7 rounds finished"))
+        server.close()
+    }
+
 
     @Test
     fun `tool loop stops at max calls`() = runBlocking {
@@ -464,4 +543,110 @@ class ChatToolLoopTest {
 
         server.close()
     }
+
+    @Test
+    fun `tool loop executes maa_visual_click and feeds result back`() = runBlocking {
+        val server = FakeChatServer(
+            listOf(
+                toolCallsResponse("maa_visual_click" to """{"instruction":"升级按钮"}"""),
+                textResponse("已成功点击升级按钮"),
+            ),
+        )
+        val bridge = FakeMaaToolBridge()
+        val invoker = MaaToolBridgeInvoker(bridge, screenshotEnabled = { false })
+        val loop = ChatToolLoop(
+            client = OpenAiCompatibleChatClient(OkHttpClient()),
+            invoker = { name, arguments -> invoker.invoke(name, arguments) },
+            limitNote = "LIMIT",
+        )
+
+        val texts = mutableListOf<String>()
+        loop.run(
+            request = request(server),
+            onText = { texts += it },
+            onThinking = {},
+            onToolCard = { _, _ -> },
+        )
+
+        assertEquals("升级按钮", bridge.lastVisualInstruction)
+        assertEquals(listOf("已成功点击升级按钮"), texts)
+        server.close()
+    }
+
+    @Test
+    fun `tool loop populates screenshotBase64 and detailLogs on tool card`() = runBlocking {
+        val server = FakeChatServer(
+            listOf(
+                toolCallsResponse("maa_screenshot" to "{}", "maa_status" to "{}"),
+                textResponse("已截图"),
+            ),
+        )
+        val cards = mutableListOf<Pair<AiToolCallCard, Boolean>>()
+        val fakeJsonResult = """{"success":true,"message":"Screenshot taken","screenshot_base64":"base64_data_xyz","detail_logs":"[2026-11-08] Log details"}"""
+        val loop = ChatToolLoop(
+            client = OpenAiCompatibleChatClient(OkHttpClient()),
+            invoker = { name, _ -> if (name == "maa_screenshot") fakeJsonResult else """{"state":"IDLE"}""" },
+            limitNote = "LIMIT",
+        )
+
+        loop.run(
+            request = request(server),
+            onText = {},
+            onThinking = {},
+            onToolCard = { card, isFinished -> cards += (card to isFinished) },
+        )
+
+        val finishedCard = cards.single { it.second && it.first.toolName == "maa_screenshot" }.first
+        assertEquals("base64_data_xyz", finishedCard.screenshotBase64)
+        assertEquals("[2026-11-08] Log details", finishedCard.detailLogs)
+        assertEquals("Screenshot taken", finishedCard.observation)
+
+        val messages = (JsonUtils.common.parseToJsonElement(server.requestBodies[1]) as JsonObject)["messages"] as JsonArray
+        val roles = messages.map { ((it as JsonObject)["role"] as kotlinx.serialization.json.JsonPrimitive).content }
+        val assistantIndex = roles.indexOfLast { it == "assistant" }
+        assertEquals(listOf("assistant", "tool", "tool", "user"), roles.drop(assistantIndex))
+        val toolText = ((messages[assistantIndex + 1] as JsonObject)["content"] as kotlinx.serialization.json.JsonPrimitive).content
+        assertFalse("base64 must not be sent as text", toolText.contains("base64_data_xyz"))
+        val imageParts = (messages.last() as JsonObject)["content"] as JsonArray
+        assertTrue(imageParts.any {
+            ((it as JsonObject)["type"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "image_url"
+        })
+        server.close()
+    }
+
+    @Test
+    fun `tool loop reflects failed click from bridge as failure message to model`() = runBlocking {
+        val server = FakeChatServer(
+            listOf(
+                toolCallsResponse("maa_click" to """{"x":100,"y":200}"""),
+                textResponse("已处理失败"),
+            ),
+        )
+        val bridge = FakeMaaToolBridge().apply {
+            clickResult = Result.success(false)
+        }
+        val invoker = MaaToolBridgeInvoker(bridge, screenshotEnabled = { false })
+        val loop = loop(
+            server = server,
+            invoker = { name, arguments -> invoker.invoke(name, arguments) },
+        )
+        val cards = mutableListOf<Pair<AiToolCallCard, Boolean>>()
+
+        val result = loop.run(
+            request = request(server),
+            onText = {},
+            onThinking = {},
+            onToolCard = { card, finished -> cards += card to finished },
+        )
+
+        assertEquals(ChatLoopResult.Completed, result)
+        val secondRequest = JsonUtils.common.parseToJsonElement(server.requestBodies[1]) as JsonObject
+        val returnedToolResult = (secondRequest["messages"] as JsonArray)
+            .map { it as JsonObject }
+            .single { (it["role"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "tool" }
+        val toolText = (returnedToolResult["content"] as kotlinx.serialization.json.JsonPrimitive).content
+        assertTrue("rejected dispatch must be reported as an error", toolText.startsWith("Error:"))
+        server.close()
+    }
+
 }

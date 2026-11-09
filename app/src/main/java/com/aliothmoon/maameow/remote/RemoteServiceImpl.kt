@@ -35,6 +35,7 @@ import com.aliothmoon.maameow.remote.internal.SystemLogDump
 import com.aliothmoon.maameow.remote.internal.ThreadDump
 import com.aliothmoon.maameow.remote.internal.UserDirProbe
 import com.aliothmoon.maameow.remote.internal.WakeUnlockController
+import com.aliothmoon.maameow.remote.internal.VirtualDisplayManager
 import com.aliothmoon.maameow.remote.internal.XmsfFirewall
 import com.aliothmoon.maameow.root.ProcessExit
 import com.aliothmoon.maameow.third.Command
@@ -371,8 +372,7 @@ class RemoteServiceImpl : RemoteService.Stub() {
     }
 
     override fun touchCancel() {
-        if (virtualDisplayMode.get() == DisplayMode.PRIMARY) return
-        val displayId = BackgroundDisplay.displayId()
+        val displayId = gameDisplayId()
         if (displayId != DefaultDisplayConfig.DISPLAY_NONE) {
             InputControlUtils.cancel(displayId)
         }
@@ -583,5 +583,57 @@ class RemoteServiceImpl : RemoteService.Stub() {
             }
         }
         return false
+    }
+    override fun swipeGame(startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Int): Boolean {
+        if (startX !in 0..1279 || endX !in 0..1279 || startY !in 0..719 || endY !in 0..719 ||
+            durationMs !in 100..2000
+        ) return false
+        val displayId = gameDisplayId()
+        if (displayId == DefaultDisplayConfig.DISPLAY_NONE) {
+            Ln.w("$TAG: swipeGame failed: no active display")
+            return false
+        }
+        val size = runCatching {
+            com.aliothmoon.maameow.third.wrappers.ServiceManager.getDisplayManager()
+                .getDisplayInfo(displayId).size()
+        }.getOrNull() ?: return false
+        val dispW = size.width()
+        val dispH = size.height()
+        if (dispW <= 0 || dispH <= 0) return false
+        val realStartX = (startX.toFloat() / 1280f * dispW).toInt().coerceIn(0, dispW - 1)
+        val realStartY = (startY.toFloat() / 720f * dispH).toInt().coerceIn(0, dispH - 1)
+        val realEndX = (endX.toFloat() / 1280f * dispW).toInt().coerceIn(0, dispW - 1)
+        val realEndY = (endY.toFloat() / 720f * dispH).toInt().coerceIn(0, dispH - 1)
+
+        val duration = durationMs.coerceIn(50, 3000)
+        val steps = maxOf(10, duration / 16)
+        val stepDelayMs = maxOf(1L, duration.toLong() / steps)
+
+        val downOk = InputControlUtils.down(realStartX, realStartY, InputControlUtils.SINGLE_CONTACT, displayId)
+        if (!downOk) {
+            Ln.w("$TAG: swipeGame down failed at ($realStartX, $realStartY) on display $displayId")
+            return false
+        }
+        return try {
+            for (step in 1..steps) {
+                val progress = step.toFloat() / steps.toFloat()
+                val curX = (realStartX + (realEndX - realStartX) * progress).toInt()
+                val curY = (realStartY + (realEndY - realStartY) * progress).toInt()
+                if (!InputControlUtils.move(curX, curY, InputControlUtils.SINGLE_CONTACT, displayId)) {
+                    InputControlUtils.cancel(displayId)
+                    return false
+                }
+                Thread.sleep(stepDelayMs)
+            }
+            val upOk = InputControlUtils.up(realEndX, realEndY, InputControlUtils.SINGLE_CONTACT, displayId)
+            if (!upOk) {
+                InputControlUtils.cancel(displayId)
+            }
+            upOk
+        } catch (e: Exception) {
+            Ln.w("$TAG: swipeGame interrupted, cancelling gesture", e)
+            InputControlUtils.cancel(displayId)
+            false
+        }
     }
 }

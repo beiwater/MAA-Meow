@@ -317,6 +317,9 @@ data class AppSettings(
     @PrefKey(name = "ai_openai_model", default = "deepseek-chat")
     val aiOpenAiModel: String = "deepseek-chat",
 
+    @PrefKey(default = "0.7")
+    val aiOpenAiTemperature: String = "0.7",
+
     @PrefKey(default = "http://127.0.0.1/v1")
     val aiDifyBaseUrl: String = "http://127.0.0.1/v1",
 
@@ -328,4 +331,25 @@ data class AppSettings(
 
     @PrefKey(default = "false")
     val aiScriptRecordEnabled: String = "false",
+
+    @PrefKey(default = "false")
+    val aiJevEnabled: String = "false",
+
+    @PrefKey(default = "")
+    val aiJevApiKey: String = "",
+
+    @PrefKey(default = "https://api.typesafe.ai/v1")
+    val aiJevBaseUrl: String = "https://api.typesafe.ai/v1",
+
+    @PrefKey(default = "jev-1.14")
+    val aiJevModel: String = "jev-1.14",
+
+    @PrefKey(default = "SHADOW")
+    val aiJevMode: String = "SHADOW",
+
+    @PrefKey(default = "0.90")
+    val aiJevToolThreshold: String = "0.90",
+
+    @PrefKey(default = "0.85")
+    val aiJevBoxThreshold: String = "0.85",
     )

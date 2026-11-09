@@ -1,5 +1,9 @@
 package com.aliothmoon.maameow.ai
 
+import com.aliothmoon.maameow.ai.jev.JevSystemOneClient
+import com.aliothmoon.maameow.ai.plan.UiPlanExecutor
+import com.aliothmoon.maameow.ai.plan.JevSettings
+import com.aliothmoon.maameow.ai.adhoc.AdHocTaskNormalizer
 import android.content.Context
 import android.util.Base64
 import com.aliothmoon.maameow.ai.mcp.ArknightsEntityValidator
@@ -10,6 +14,8 @@ import com.aliothmoon.maameow.ai.mcp.RunLaunchResultDto
 import com.aliothmoon.maameow.ai.mcp.ScriptSummaryDto
 import com.aliothmoon.maameow.ai.mcp.TaskItemStatusDto
 import com.aliothmoon.maameow.ai.mcp.TaskTypeSpec
+import com.aliothmoon.maameow.ai.mcp.WorkspaceFileDto
+import com.aliothmoon.maameow.ai.workspace.AgentWorkspaceManager
 import com.aliothmoon.maameow.data.config.MaaPathConfig
 import com.aliothmoon.maameow.data.log.LogEntry
 import com.aliothmoon.maameow.data.model.LogLevel
@@ -50,13 +56,20 @@ import com.aliothmoon.maameow.domain.usecase.TaskStartContext
 import com.aliothmoon.maameow.domain.usecase.TaskStartMode
 import com.aliothmoon.maameow.maa.callback.TaskChainStatusTracker
 import com.aliothmoon.maameow.maa.task.MaaTaskType
+import com.aliothmoon.maameow.maa.task.MaaTaskParams
+import com.aliothmoon.maameow.domain.service.OperBoxYituliuSync
 import com.aliothmoon.maameow.utils.JsonUtils
 import com.aliothmoon.maameow.manager.RemoteServiceManager
-import kotlinx.coroutines.delay
 import com.aliothmoon.maameow.utils.i18n.resolve
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
@@ -102,11 +115,18 @@ class AndroidMaaToolBridge(
     private val httpClient: OkHttpClient,
     private val operBoxRepository: OperBoxRepository,
     private val depotRepository: DepotRepository,
+    private val operBoxYituliuSync: OperBoxYituliuSync,
+    private val workspaceManager: AgentWorkspaceManager = AgentWorkspaceManager(context),
+    private val jevClient: JevSystemOneClient? = null,
 ) : MaaToolBridge {
+    private val resolvedJevClient: JevSystemOneClient by lazy {
+        jevClient ?: JevSystemOneClient(httpClient)
+    }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = JsonUtils.common
     private val activeRunId = AtomicReference<String?>(null)
+    private val dataRefreshMutex = Mutex()
 
     override val taskSpecs: List<TaskTypeSpec> by lazy {
         TaskTypeInfo.entries.map { info ->
@@ -335,6 +355,40 @@ class AndroidMaaToolBridge(
         )
     }
 
+    override suspend fun executeAdHoc(tasks: JsonArray, force: Boolean): Result<RunLaunchResultDto> = runCatching {
+        if (tasks.isEmpty()) {
+            throw IllegalArgumentException("Task list cannot be empty")
+        }
+
+        val normalizer = AdHocTaskNormalizer(validator = validator)
+        val nodes = normalizer.normalize(tasks)
+
+        if (!compositionService.state.value.isIdle) {
+            if (!force) {
+                throw IllegalStateException("Task is currently ${compositionService.state.value}; pass force=true to preempt")
+            }
+            compositionService.stop(MaaCompositionService.StopOrigin.USER)
+        }
+
+        val runId = "adhoc-${UUID.randomUUID().toString().take(8)}"
+        activeRunId.set(runId)
+
+        scope.launch {
+            startTaskChainUseCase(
+                chain = nodes,
+                context = TaskStartContext(mode = TaskStartMode.SCHEDULED),
+                scheduleLabel = "AI Ad-Hoc ($runId)",
+            )
+        }
+
+        RunLaunchResultDto(
+            started = true,
+            runId = runId,
+            profileId = "adhoc",
+            message = "Ad-hoc task chain with ${nodes.size} tasks launched asynchronously",
+        )
+    }
+
     override suspend fun stop(): Result<Boolean> = runCatching {
         val res = compositionService.stop(MaaCompositionService.StopOrigin.USER)
         res == MaaCompositionService.StopResult.Success
@@ -549,12 +603,107 @@ class AndroidMaaToolBridge(
             sb.toString().trimEnd()
         }
     }
-    override suspend fun getUserData(category: String, filter: String?): Result<JsonObject> = withContext(Dispatchers.IO) {
+    private suspend fun refreshUserData(category: String): JsonObject {
+        require(category == "operators" || category == "depot" || category == "all") { "Unknown refresh category: $category" }
+        check(dataRefreshMutex.tryLock()) { "A user-data update is already running" }
+        // Admitted toolbox work survives cancellation of the chat wait, like other native tasks.
+        // Do not issue a global stop here: it could stop an unrelated task.
+        return scope.async {
+            try {
+                withTimeout(300_000L) {
+                    taskChainState.isLoaded.first { it }
+                    operBoxRepository.isLoaded.first { it }
+                    depotRepository.isLoaded.first { it }
+                    check(compositionService.state.value.isIdle) { "Another native task is active; finish it before updating data" }
+                    val profileId = taskChainState.profileId.value
+                    val wantsOperators = category != "depot"
+                    val wantsDepot = category != "operators"
+                    val beforeOperators = operBoxRepository.snapshot.value.syncTimeMillis
+                    val beforeDepot = depotRepository.snapshot.value.syncTimeMillis
+                    val useImport = wantsOperators && appSettings.operBoxUseYituliuApi.value
+                    var skipped = 0
+                    val warnings = mutableListOf<String>()
+                    if (useImport) {
+                        when (val result = operBoxYituliuSync.sync()) {
+                            is OperBoxYituliuSync.Result.Success -> skipped = result.skipped
+                            is OperBoxYituliuSync.Result.Failed -> warnings += result.message.resolve(context)
+                        }
+                    }
+                    check(taskChainState.profileId.value == profileId) { "Profile changed during data update; result cannot be attributed safely" }
+                    val nativeTasks = buildList {
+                        if (wantsOperators && !useImport) add(MaaTaskParams(MaaTaskType.OPER_BOX, "{}"))
+                        if (wantsDepot) add(MaaTaskParams(MaaTaskType.DEPOT, "{}"))
+                    }
+                    if (nativeTasks.isNotEmpty()) {
+                        val started = compositionService.startCopilot(nativeTasks)
+                        if (started is MaaCompositionService.StartResult.Success) {
+                            activeRunId.set("refresh-${UUID.randomUUID().toString().take(8)}")
+                            val terminal = compositionService.state.first { it.isIdle }
+                            if (terminal == MaaExecutionState.ERROR) warnings += "Native recognition ended with an error"
+                        } else {
+                            warnings += "Native recognition did not start: ${started.javaClass.simpleName}"
+                        }
+                    }
+                    check(taskChainState.profileId.value == profileId) { "Profile changed during data update; do not use the result for the previous profile" }
+                    val operators = operBoxRepository.snapshot.value
+                    val depot = depotRepository.snapshot.value
+                    val operatorsUpdated = wantsOperators && operators.syncTimeMillis > beforeOperators && operators.owned.isNotEmpty()
+                    val depotUpdated = wantsDepot && depot.syncTimeMillis > beforeDepot && depot.items.isNotEmpty()
+                    val allUpdated = (!wantsOperators || operatorsUpdated) && (!wantsDepot || depotUpdated)
+                    buildJsonObject {
+                        put("requested", true)
+                        put("profileId", profileId)
+                        put("status", when {
+                            allUpdated && skipped == 0 -> "snapshot_updated"
+                            operatorsUpdated || depotUpdated -> "partial"
+                            else -> "not_updated"
+                        })
+                        put("operatorsUpdated", operatorsUpdated)
+                        put("depotUpdated", depotUpdated)
+                        put("operatorsSource", if (useImport) "yituliu_download" else "native_recognition")
+                        put("upstreamObservationTimeKnown", false)
+                        put("upstreamOperatorsSkipped", skipped)
+                        put("operatorSnapshotTimeMillis", operators.syncTimeMillis)
+                        put("depotSnapshotTimeMillis", depot.syncTimeMillis)
+                        put("warnings", buildJsonArray { warnings.forEach { add(it) } })
+                    }
+                }
+            } catch (e: TimeoutCancellationException) {
+                throw IllegalStateException("Timed out awaiting data update; native recognition may still be running. No refresh success is claimed.", e)
+            } finally {
+                dataRefreshMutex.unlock()
+            }
+        }.await()
+    }
+
+    override suspend fun getUserData(category: String, filter: String?, refresh: Boolean): Result<JsonObject> = withContext(Dispatchers.IO) {
         runCatching {
             val cat = category.trim().lowercase()
             val queryFilter = filter?.trim()?.takeIf { it.isNotEmpty() }
+            taskChainState.isLoaded.first { it }
+            operBoxRepository.isLoaded.first { it }
+            depotRepository.isLoaded.first { it }
+            val refreshReport = if (refresh) refreshUserData(cat) else null
+            val profileId = taskChainState.profileId.value
+            check(refreshReport == null || refreshReport["profileId"]?.jsonPrimitive?.content == profileId) {
+                "Profile changed after update; read the selected profile again"
+            }
+            val readAtMillis = System.currentTimeMillis()
 
             buildJsonObject {
+                put("source", "cached_snapshot")
+                put("isLive", false)
+                put("updateInProgress", dataRefreshMutex.isLocked)
+                put("profileId", profileId)
+                put("readAtMillis", readAtMillis)
+                put("refresh", refreshReport ?: buildJsonObject {
+                    put("requested", false)
+                    put("status", "not_requested")
+                })
+                if (refresh && appSettings.aiScreenshotEnabled.value && compositionService.state.value.isIdle) {
+                    val currentFrame = runCatching { frameSnapshotter.captureJpeg() }.getOrNull()
+                    if (currentFrame != null) put("screenshot_base64", Base64.encodeToString(currentFrame, Base64.NO_WRAP))
+                }
                 if (cat == "operators" || cat == "all") {
                     val operSnapshot = operBoxRepository.snapshot.value
                     val filteredOwned = operSnapshot.owned.filter { op ->
@@ -565,6 +714,7 @@ class AndroidMaaToolBridge(
                     put("operators", buildJsonObject {
                         put("hasSynced", operSnapshot.hasSynced)
                         put("syncTimeMillis", operSnapshot.syncTimeMillis)
+                        put("ageMillis", (readAtMillis - operSnapshot.syncTimeMillis).takeIf { operSnapshot.hasSynced && it >= 0L })
                         put("owned", buildJsonArray {
                             filteredOwned.forEach { op ->
                                 add(buildJsonObject {
@@ -601,6 +751,7 @@ class AndroidMaaToolBridge(
                     put("depot", buildJsonObject {
                         put("hasSynced", depotSnapshot.hasSynced)
                         put("syncTimeMillis", depotSnapshot.syncTimeMillis)
+                        put("ageMillis", (readAtMillis - depotSnapshot.syncTimeMillis).takeIf { depotSnapshot.hasSynced && it >= 0L })
                         put("items", buildJsonObject {
                             depotSnapshot.items.forEach { (itemId, count) ->
                                 val itemName = itemHelper.getItemInfo(itemId)?.name ?: itemId
@@ -614,8 +765,10 @@ class AndroidMaaToolBridge(
                         })
                     })
                 }
+            }.also {
+                check(taskChainState.profileId.value == profileId) { "Profile changed while reading cached data" }
             }
-        }
+        }.onFailure { if (it is CancellationException) throw it }
     }
 
     override suspend fun getWikiArticle(title: String, wiki: String): Result<String> = withContext(Dispatchers.IO) {
@@ -724,21 +877,30 @@ class AndroidMaaToolBridge(
 
     override suspend fun click(x: Int, y: Int): Result<Boolean> = withContext(Dispatchers.IO) {
         runCatching {
-            val clampedX = x.coerceIn(0, 1280)
-            val clampedY = y.coerceIn(0, 720)
+            require(x in 0..1279) { "Click X coordinate ($x) is outside standard game bounds (0..1279)" }
+            require(y in 0..719) { "Click Y coordinate ($y) is outside standard game bounds (0..719)" }
             val service = RemoteServiceManager.getInstanceOrNull()
                 ?: throw IllegalStateException("Remote elevated service not connected")
             val maa = service.maaCoreService
-            if (maa != null && maa.hasInstance()) {
-                val res = maa.AsyncClick(clampedX, clampedY, true)
-                res >= 0
-            } else {
-                // Fallback: inject touch via RemoteService if no core instance
-                service.touchDown(clampedX, clampedY, 0)
-                delay(50)
-                service.touchUp(clampedX, clampedY, 0)
-                true
+                ?: throw IllegalStateException("MaaCoreService not available")
+            check(maa.hasInstance()) { "MaaCore has no active instance; connect the game before clicking" }
+            check(maa.AsyncClick(x, y, true) > 0) {
+                "MaaCore rejected the click at ($x, $y)"
             }
+            true
+        }
+    }
+
+    suspend fun swipe(startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Int = 300): Result<Boolean> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(startX in 0..1279 && endX in 0..1279) { "Swipe X ($startX -> $endX) out of bounds (0..1279)" }
+            require(startY in 0..719 && endY in 0..719) { "Swipe Y ($startY -> $endY) out of bounds (0..719)" }
+            val service = RemoteServiceManager.getInstanceOrNull()
+                ?: throw IllegalStateException("Remote elevated service not connected")
+            check(service.swipeGame(startX, startY, endX, endY, durationMs)) {
+                "Swipe gesture failed from ($startX, $startY) to ($endX, $endY)"
+            }
+            true
         }
     }
 
@@ -751,8 +913,105 @@ class AndroidMaaToolBridge(
             if (!maa.hasInstance()) {
                 throw IllegalStateException("MaaCore has no active instance")
             }
-            maa.BackToHome()
+            check(maa.BackToHome()) { "MaaCore could not return to the home screen" }
+            true
         }
+    }
+
+    override suspend fun visualClick(instruction: String): Result<JsonObject> = withContext(Dispatchers.IO) {
+        runCatching {
+            check(appSettings.aiScreenshotEnabled.value) { "Enable 'Allow AI Screenshot' before visual actions" }
+            check(!dataRefreshMutex.isLocked && compositionService.state.value.isIdle) { "Finish native tasks/data update before visual UI actions" }
+            val startTime = System.currentTimeMillis()
+            val timeStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date(startTime))
+            val jpegBytes = frameSnapshotter.captureJpeg()
+                ?: return@runCatching buildJsonObject {
+                    put("success", false)
+                    put("confidence", 0f)
+                    put("message", "Cannot capture frame")
+                    put("detail_logs", "[$timeStr] visualClick failed: Cannot capture frame from screen")
+                }
+            val base64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+            val evalResult = resolvedJevClient.evaluate(
+                baseUrl = appSettings.aiJevBaseUrl.value,
+                apiKey = appSettings.aiJevApiKey.value,
+                model = appSettings.aiJevModel.value.ifBlank { "jev-1.14" },
+                stateText = instruction,
+                stateImageBase64 = base64,
+                boxInstruction = instruction,
+            ).getOrThrow()
+
+            val popupBox = evalResult.popupBox
+            if (popupBox != null && popupBox.confidence >= 0.60f) {
+                val (x, y) = popupBox.box.toScreenCoordinates()
+                check(click(x, y).getOrThrow()) { "Click was not dispatched" }
+                delay(600)
+                val postActionFrame = runCatching { frameSnapshotter.captureJpeg() }.getOrNull()
+                val log = "[$timeStr] visualClick success\n" +
+                    "Target: $instruction\n" +
+                    "Bounding Box: [${popupBox.box.ymin}, ${popupBox.box.xmin}, ${popupBox.box.ymax}, ${popupBox.box.xmax}]\n" +
+                    "Screen Coordinates: ($x, $y)\n" +
+                    "Confidence: ${popupBox.confidence}\n" +
+                    "Latency: ${evalResult.latencyMs}ms"
+                buildJsonObject {
+                    put("success", true)
+                    put("dispatched", true)
+                    put("x", x)
+                    put("y", y)
+                    put("confidence", popupBox.confidence)
+                    put("latency_ms", evalResult.latencyMs)
+                    put("message", "Click dispatched for '$instruction' at ($x, $y); inspect the returned current frame before claiming the goal is complete.")
+                    put("screenshot_phase", if (postActionFrame != null) "after_dispatch" else "unavailable")
+                    if (postActionFrame != null) {
+                        put("screenshot_base64", Base64.encodeToString(postActionFrame, Base64.NO_WRAP))
+                    }
+                    put("detail_logs", log)
+                }
+            } else {
+                val conf = popupBox?.confidence ?: 0f
+                val boxStr = popupBox?.box?.let { "[${it.ymin}, ${it.xmin}, ${it.ymax}, ${it.xmax}]" } ?: "null"
+                val log = "[$timeStr] visualClick target not found\n" +
+                    "Target: $instruction\n" +
+                    "Bounding Box: $boxStr\n" +
+                    "Confidence: $conf (threshold: 0.60)\n" +
+                    "Latency: ${evalResult.latencyMs}ms"
+                buildJsonObject {
+                    put("success", false)
+                    put("dispatched", false)
+                    put("screenshot_phase", "no_action")
+                    put("confidence", conf)
+                    put("message", "Target '$instruction' not found with sufficient confidence; request LLM spot-check and replan")
+                    put("screenshot_base64", base64)
+                    put("detail_logs", log)
+                }
+            }
+        }
+    }
+
+    override suspend fun executeUiPlan(plan: JsonObject): Result<JsonObject> = withContext(Dispatchers.IO) {
+        if (dataRefreshMutex.isLocked || !compositionService.state.value.isIdle) {
+            return@withContext Result.failure(IllegalStateException("Finish native tasks/data update before executing a UI plan"))
+        }
+        if (!appSettings.aiScreenshotEnabled.value) {
+            return@withContext Result.failure(IllegalStateException("Enable 'Allow AI Screenshot' before UI plans"))
+        }
+        val executor = UiPlanExecutor(
+            jevClient = resolvedJevClient,
+            frameSnapshotter = frameSnapshotter,
+            clickDispatcher = { x, y -> click(x, y) },
+            swipeDispatcher = { sx, sy, ex, ey, dur -> swipe(sx, sy, ex, ey, dur) },
+            cancelGestureDispatcher = {
+                runCatching { RemoteServiceManager.getInstanceOrNull()?.touchCancel() }
+            },
+            jevSettings = {
+                JevSettings(
+                    baseUrl = appSettings.aiJevBaseUrl.value,
+                    apiKey = appSettings.aiJevApiKey.value,
+                    model = appSettings.aiJevModel.value.ifBlank { "jev-1.14" },
+                )
+            },
+        )
+        executor.execute(plan)
     }
 
     /**
@@ -797,5 +1056,85 @@ class AndroidMaaToolBridge(
                 config = config,
             )
         }
+    }
+
+    override suspend fun saveWorkspaceFile(
+        name: String,
+        content: String,
+        description: String?,
+    ): Result<WorkspaceFileDto> = runCatching {
+        val file = workspaceManager.saveFile(name, content, description)
+        WorkspaceFileDto(
+            name = file.name,
+            size = file.length(),
+            updatedAt = file.lastModified(),
+            description = description,
+        )
+    }
+
+    override suspend fun readWorkspaceFile(name: String): Result<String> = runCatching {
+        workspaceManager.readFile(name)
+            ?: throw IllegalArgumentException("Workspace file '$name' not found")
+    }
+
+    override suspend fun listWorkspaceFiles(): Result<List<WorkspaceFileDto>> = runCatching {
+        workspaceManager.listFiles().map {
+            WorkspaceFileDto(
+                name = it.name,
+                size = it.size,
+                updatedAt = it.updatedAt,
+                description = it.description,
+            )
+        }
+    }
+
+    override suspend fun runWorkspaceScript(name: String, force: Boolean): Result<RunLaunchResultDto> = runCatching {
+        val content = workspaceManager.readFile(name)
+            ?: throw IllegalArgumentException("Workspace file '$name' not found")
+
+        val normalizer = AdHocTaskNormalizer(validator = validator)
+        val nodes = try {
+            val element = json.parseToJsonElement(content)
+            when (element) {
+                is JsonArray -> normalizer.normalize(element)
+                is JsonObject -> {
+                    val tasks = element["tasks"] as? JsonArray
+                        ?: throw IllegalArgumentException("Workspace script JSON object must contain 'tasks' array")
+                    normalizer.normalize(tasks)
+                }
+                else -> throw IllegalArgumentException("Workspace script must be a JSON array or object with 'tasks'")
+            }
+        } catch (e: Exception) {
+            throw IllegalArgumentException("Failed to parse workspace script '$name': ${e.message}", e)
+        }
+
+        if (!compositionService.state.value.isIdle) {
+            if (!force) {
+                throw IllegalStateException("Task is currently ${compositionService.state.value}; pass force=true to preempt")
+            }
+            compositionService.stop(MaaCompositionService.StopOrigin.USER)
+        }
+
+        val runId = "ws-${UUID.randomUUID().toString().take(8)}"
+        activeRunId.set(runId)
+
+        scope.launch {
+            startTaskChainUseCase(
+                chain = nodes,
+                context = TaskStartContext(mode = TaskStartMode.SCHEDULED),
+                scheduleLabel = "AI Workspace Script ($name)",
+            )
+        }
+
+        RunLaunchResultDto(
+            started = true,
+            runId = runId,
+            profileId = name,
+            message = "Workspace script '$name' launched asynchronously",
+        )
+    }
+
+    override suspend fun deleteWorkspaceFile(name: String): Result<Boolean> = runCatching {
+        workspaceManager.deleteFile(name)
     }
 }

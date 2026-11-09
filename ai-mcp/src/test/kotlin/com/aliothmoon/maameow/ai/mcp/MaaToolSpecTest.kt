@@ -22,6 +22,7 @@ class MaaToolSpecTest {
         "maa_update_profile",
         "maa_delete_profile",
         "maa_run_profile",
+        "maa_execute_adhoc",
         "maa_stop",
         "maa_save_script",
         "maa_list_scripts",
@@ -34,13 +35,19 @@ class MaaToolSpecTest {
         "maa_get_wiki_article",
         "maa_click",
         "maa_back_to_home",
+        "maa_visual_click",
+        "maa_execute_ui_plan",
+        "maa_save_workspace_file",
+        "maa_read_workspace_file",
+        "maa_list_workspace_files",
+        "maa_run_workspace_script",
+        "maa_delete_workspace_file",
     )
 
     @Test
-    fun `toolSpecs exposes exactly the twenty known MCP tools`() {
+    fun `toolSpecs preserves the published MCP names`() {
         val specs = MaaMcpServerFactory.toolSpecs
 
-        assertEquals(20, specs.size)
         assertEquals(expectedToolNames, specs.map { it.name })
         assertEquals("tool names must be unique", specs.size, specs.map { it.name }.toSet().size)
         assertTrue("every tool needs a description", specs.all { it.description.isNotBlank() })

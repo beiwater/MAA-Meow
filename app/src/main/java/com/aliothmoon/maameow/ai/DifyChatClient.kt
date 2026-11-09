@@ -1,5 +1,9 @@
 package com.aliothmoon.maameow.ai
 
+import com.aliothmoon.maameow.ai.usage.AiMessageUsage
+import com.aliothmoon.maameow.ai.usage.AiRequestUsage
+import java.math.BigDecimal
+import java.util.UUID
 import com.aliothmoon.maameow.utils.JsonUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -30,6 +34,9 @@ data class AiToolCallCard(
     val toolInput: String,
     val observation: String = "",
     val isFinished: Boolean = false,
+    val tier: String? = null,
+    val screenshotBase64: String? = null,
+    val detailLogs: String? = null,
 )
 
 @Serializable
@@ -46,6 +53,8 @@ data class AiChatMessage(
     val errorDetail: String? = null,
     /** 该错误可通过「去设置」跳转 AI 控制页补配置 */
     val errorNeedsSetup: Boolean = false,
+    /** 本轮用量与费用统计；旧历史为空表示未知 */
+    val usage: AiMessageUsage? = null,
 )
 
 sealed interface DifyStreamEvent {
@@ -53,7 +62,8 @@ sealed interface DifyStreamEvent {
     data class TextDelta(val delta: String) : DifyStreamEvent
     data class ToolCallStarted(val id: String, val toolName: String, val toolInput: String) : DifyStreamEvent
     data class ToolCallFinished(val id: String, val toolName: String, val toolInput: String, val observation: String) : DifyStreamEvent
-    data class Completed(val messageId: String, val conversationId: String) : DifyStreamEvent
+    data class Completed(val messageId: String, val conversationId: String, val usage: AiRequestUsage? = null) : DifyStreamEvent
+    data class Usage(val usage: AiRequestUsage) : DifyStreamEvent
     data class Error(
         val message: String,
         val kind: ChatErrorKind = ChatErrorKind.UNKNOWN,
@@ -240,7 +250,27 @@ class DifyChatClient(
                     DifyStreamEvent.ToolCallStarted(id, tool, toolInput)
                 }
             }
-            "message_end" -> DifyStreamEvent.Completed(messageId, convId)
+            "message_end" -> {
+                val metadata = obj["metadata"] as? JsonObject
+                val usageObj = metadata?.get("usage") as? JsonObject
+                val difyUsage = if (usageObj != null) {
+                    val promptTokens = (usageObj["prompt_tokens"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+                    val completionTokens = (usageObj["completion_tokens"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+                    val totalPrice = (usageObj["total_price"] as? JsonPrimitive)?.contentOrNull?.let { raw ->
+                        runCatching { BigDecimal(raw).toPlainString() }.getOrDefault(raw)
+                    }
+                    AiRequestUsage(
+                        requestId = messageId.ifBlank { taskId }.ifBlank { UUID.randomUUID().toString() },
+                        source = "LLM",
+                        model = (metadata["model"] as? JsonPrimitive)?.contentOrNull ?: "dify",
+                        baseUrl = "",
+                        inputTokens = promptTokens,
+                        outputTokens = completionTokens,
+                        reportedCostUsd = totalPrice,
+                    )
+                } else null
+                DifyStreamEvent.Completed(messageId, convId, difyUsage)
+            }
             "error" -> {
                 val msg = (obj["message"] as? JsonPrimitive)?.contentOrNull ?: "Unknown Dify error"
                 DifyStreamEvent.Error(msg, kind = ChatErrorKind.PROVIDER)

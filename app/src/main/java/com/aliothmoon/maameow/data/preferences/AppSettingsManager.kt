@@ -62,7 +62,14 @@ class AppSettingsManager internal constructor(
     )
 
     companion object {
-        val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "app_settings")
+        /**
+         * app_settings 存储。挂载 [AiControlEnabledTypeMigration]：历史构建把
+         * `ai_control_enabled` 存成 Boolean，而 schema 按 String 读取，启动直接 ClassCastException。
+         */
+        val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
+            name = "app_settings",
+            produceMigrations = { listOf(AiControlEnabledTypeMigration) },
+        )
 
         /** 解锁方式：滑动 / 手动录制（录制触控序列回放，可覆盖密码锁屏）/ PIN */
         const val WAKE_TYPE_SWIPE = UnlockCredential.TYPE_SWIPE
@@ -1076,6 +1083,15 @@ class AppSettingsManager internal constructor(
         }
     }
 
+    val aiOpenAiTemperature: StateFlow<Float> =
+        setting { it.aiOpenAiTemperature.toFloatOrNull() ?: 0.7f }
+
+    suspend fun setAiOpenAiTemperature(temp: Float) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiOpenAiTemperature] = temp.toString() }
+        }
+    }
+
     val aiDifyBaseUrl: StateFlow<String> = setting { it.aiDifyBaseUrl.ifBlank { "http://127.0.0.1/v1" } }
 
     suspend fun setAiDifyBaseUrl(url: String) {
@@ -1109,6 +1125,67 @@ class AppSettingsManager internal constructor(
         }
     }
 
+    val aiJevEnabled: StateFlow<Boolean> =
+        setting { it.aiJevEnabled.toBooleanStrictOrNull() ?: false }
+
+    suspend fun setAiJevEnabled(enabled: Boolean) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiJevEnabled] = enabled.toString() }
+        }
+    }
+
+    val aiJevApiKey: StateFlow<String> = setting { it.aiJevApiKey }
+
+    suspend fun setAiJevApiKey(apiKey: String) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiJevApiKey] = apiKey.trim() }
+        }
+    }
+
+    val aiJevBaseUrl: StateFlow<String> =
+        setting { it.aiJevBaseUrl.ifBlank { "https://api.typesafe.ai/v1" } }
+
+    suspend fun setAiJevBaseUrl(url: String) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiJevBaseUrl] = url.trim().trimEnd('/') }
+        }
+    }
+
+    val aiJevModel: StateFlow<String> =
+        setting { it.aiJevModel.ifBlank { "jev-1.14" } }
+
+    suspend fun setAiJevModel(model: String) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiJevModel] = model.trim() }
+        }
+    }
+
+    val aiJevMode: StateFlow<String> =
+        setting { it.aiJevMode.ifBlank { "SHADOW" } }
+
+    suspend fun setAiJevMode(mode: String) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiJevMode] = mode.trim() }
+        }
+    }
+
+    val aiJevToolThreshold: StateFlow<String> =
+        setting { it.aiJevToolThreshold.ifBlank { "0.90" } }
+
+    suspend fun setAiJevToolThreshold(threshold: String) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiJevToolThreshold] = threshold.trim() }
+        }
+    }
+
+    val aiJevBoxThreshold: StateFlow<String> =
+        setting { it.aiJevBoxThreshold.ifBlank { "0.85" } }
+
+    suspend fun setAiJevBoxThreshold(threshold: String) {
+        with(AppSettingsSchema) {
+            context.dataStore.edit { it[aiJevBoxThreshold] = threshold.trim() }
+        }
+    }
     // 放在类体末尾，启动收集器时 setting() 已全部注册
     init {
         // 单次收集统一更新，避免就绪标记早于各字段的 stateIn

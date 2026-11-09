@@ -3,6 +3,7 @@ package com.aliothmoon.maameow.ai
 import com.aliothmoon.maameow.ai.mcp.MaaToolBridge
 import com.aliothmoon.maameow.ai.mcp.TaskSchemaGenerator
 import com.aliothmoon.maameow.utils.JsonUtils
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -31,13 +32,14 @@ class MaaToolBridgeInvoker(
     /**
      * 执行一次工具调用。
      *
-     * 永不抛出：参数错误、未实现的方法、桥接异常都会变成给模型看的文本，
-     * 让它可以自我纠正，而不是把整个对话打断。
+     * 参数错误与桥接异常变成给模型看的文本；取消必须传播，停止后不再执行。
      *
      * @param argumentsJson 模型输出的 `function.arguments`（可能是空串或非法 JSON）
      */
     suspend fun invoke(name: String, argumentsJson: String): String = try {
         execute(name, parseArguments(argumentsJson))
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: Exception) {
         Timber.w(e, "Tool invocation failed: %s", name)
         failure("${e.javaClass.simpleName}: ${e.message ?: "tool invocation failed"}")
@@ -117,9 +119,50 @@ class MaaToolBridgeInvoker(
 
             "maa_run_profile" -> {
                 val profileId = args.stringOrNull("profile_id")?.takeIf { it.isNotBlank() }
-                bridge.runProfile(profileId, args.booleanOrFalse("force")).fold(
-                    onSuccess = { json.encodeToString(it) },
+                val force = args.booleanOrFalse("force")
+                bridge.runProfile(profileId, force).fold(
+                    onSuccess = { res ->
+                        val timeStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date())
+                        val log = "[$timeStr] maa_run_profile\n" +
+                            "Profile ID: ${profileId ?: "(active)"}\n" +
+                            "Force: $force\n" +
+                            "Started: ${res.started}\n" +
+                            "Run ID: ${res.runId}\n" +
+                            "Message: ${res.message}"
+                        buildJsonObject {
+                            put("started", res.started)
+                            put("runId", res.runId)
+                            put("profileId", res.profileId)
+                            put("message", res.message)
+                            put("detail_logs", log)
+                        }.toString()
+                    },
                     onFailure = { failure(it.message ?: "Failed to start profile") },
+                )
+            }
+
+            "maa_execute_adhoc" -> {
+                val tasks = args["tasks"] as? JsonArray
+                    ?: return failure("Missing required 'tasks' array")
+                val force = if (args.containsKey("force")) args.booleanOrFalse("force") else true
+                bridge.executeAdHoc(tasks, force).fold(
+                    onSuccess = { res ->
+                        val timeStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date())
+                        val log = "[$timeStr] maa_execute_adhoc\n" +
+                            "Tasks Count: ${tasks.size}\n" +
+                            "Force: $force\n" +
+                            "Started: ${res.started}\n" +
+                            "Run ID: ${res.runId}\n" +
+                            "Message: ${res.message}"
+                        buildJsonObject {
+                            put("started", res.started)
+                            put("runId", res.runId)
+                            put("profileId", res.profileId)
+                            put("message", res.message)
+                            put("detail_logs", log)
+                        }.toString()
+                    },
+                    onFailure = { failure(it.message ?: "Failed to execute ad-hoc task") },
                 )
             }
 
@@ -178,8 +221,17 @@ class MaaToolBridgeInvoker(
                 }
                 bridge.captureScreenshotBase64().fold(
                     onSuccess = { base64 ->
-                        "Screenshot captured (image/jpeg, ${base64.length} base64 chars)。" +
-                            "本对话通道只显示文本，无法内联图像；请让用户在应用内查看截图结果。"
+                        val timeStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date())
+                        val log = "[$timeStr] maa_screenshot captured\n" +
+                            "Format: image/jpeg\n" +
+                            "Base64 Size: ${base64.length} chars"
+                        val obs = "Game screenshot captured (image/jpeg). Inspect the attached image before choosing the next action."
+                        buildJsonObject {
+                            put("success", true)
+                            put("message", obs)
+                            put("screenshot_base64", base64)
+                            put("detail_logs", log)
+                        }.toString()
                     },
                     onFailure = { failure(it.message ?: "Failed to capture screenshot") },
                 )
@@ -208,7 +260,7 @@ class MaaToolBridgeInvoker(
             "maa_get_user_data" -> {
                 val category = args.stringOrNull("category")?.trim()?.lowercase() ?: "all"
                 val filter = args.stringOrNull("filter")?.trim()?.takeIf { it.isNotEmpty() }
-                bridge.getUserData(category, filter).fold(
+                bridge.getUserData(category, filter, args.booleanOrFalse("refresh")).fold(
                     onSuccess = { json.encodeToString(it) },
                     onFailure = { failure(it.message ?: "Failed to get user data") },
                 )
@@ -228,7 +280,20 @@ class MaaToolBridgeInvoker(
                 val x = args.intOrNull("x") ?: return failure("Missing or invalid 'x' coordinate")
                 val y = args.intOrNull("y") ?: return failure("Missing or invalid 'y' coordinate")
                 bridge.click(x, y).fold(
-                    onSuccess = { "Click dispatched successfully to ($x, $y)" },
+                    onSuccess = {
+                        if (!it) return failure("MaaCore rejected the click at ($x, $y)")
+                        val timeStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date())
+                        val log = "[$timeStr] Click dispatched\n" +
+                            "Coordinates: ($x, $y)\n" +
+                            "Status: success"
+                        buildJsonObject {
+                            put("success", true)
+                            put("x", x)
+                            put("y", y)
+                            put("message", "Click dispatched successfully to ($x, $y)")
+                            put("detail_logs", log)
+                        }.toString()
+                    },
                     onFailure = { failure(it.message ?: "Failed to execute click") },
                 )
             }
@@ -237,6 +302,66 @@ class MaaToolBridgeInvoker(
                 onSuccess = { "BackToHome routine executed successfully" },
                 onFailure = { failure(it.message ?: "Failed to execute BackToHome") },
             )
+
+            "maa_visual_click" -> {
+                val instruction = args.stringOrNull("instruction")?.trim().orEmpty()
+                if (instruction.isEmpty()) return failure("Missing required 'instruction'")
+                bridge.visualClick(instruction).fold(
+                    onSuccess = { json.encodeToString(it) },
+                    onFailure = { failure(it.message ?: "Failed to execute visual click") },
+                )
+            }
+            "maa_execute_ui_plan" -> {
+                bridge.executeUiPlan(args).fold(
+                    onSuccess = { json.encodeToString(it) },
+                    onFailure = { failure(it.message ?: "Failed to execute UI plan") },
+                )
+            }
+
+
+            "maa_save_workspace_file" -> {
+                val fileName = args.stringOrNull("name")?.trim().orEmpty()
+                if (fileName.isEmpty()) return failure("Missing required 'name'")
+                val content = args.stringOrNull("content") ?: return failure("Missing required 'content'")
+                val description = args.stringOrNull("description")?.trim()
+                bridge.saveWorkspaceFile(fileName, content, description).fold(
+                    onSuccess = { json.encodeToString(it) },
+                    onFailure = { failure(it.message ?: "Failed to save workspace file") },
+                )
+            }
+
+            "maa_read_workspace_file" -> {
+                val fileName = args.stringOrNull("name")?.trim().orEmpty()
+                if (fileName.isEmpty()) return failure("Missing required 'name'")
+                bridge.readWorkspaceFile(fileName).fold(
+                    onSuccess = { it },
+                    onFailure = { failure(it.message ?: "Failed to read workspace file") },
+                )
+            }
+
+            "maa_list_workspace_files" -> bridge.listWorkspaceFiles().fold(
+                onSuccess = { json.encodeToString(it) },
+                onFailure = { failure(it.message ?: "Failed to list workspace files") },
+            )
+
+            "maa_run_workspace_script" -> {
+                val fileName = args.stringOrNull("name")?.trim().orEmpty()
+                if (fileName.isEmpty()) return failure("Missing required 'name'")
+                val force = if (args.containsKey("force")) args.booleanOrFalse("force") else true
+                bridge.runWorkspaceScript(fileName, force).fold(
+                    onSuccess = { json.encodeToString(it) },
+                    onFailure = { failure(it.message ?: "Failed to run workspace script") },
+                )
+            }
+
+            "maa_delete_workspace_file" -> {
+                val fileName = args.stringOrNull("name")?.trim().orEmpty()
+                if (fileName.isEmpty()) return failure("Missing required 'name'")
+                bridge.deleteWorkspaceFile(fileName).fold(
+                    onSuccess = { buildJsonObject { put("deleted", it); put("name", fileName) }.toString() },
+                    onFailure = { failure(it.message ?: "Failed to delete workspace file") },
+                )
+            }
 
             else -> failure("Unknown tool: $name")
         }

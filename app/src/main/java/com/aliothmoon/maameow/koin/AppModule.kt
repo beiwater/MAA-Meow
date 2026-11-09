@@ -11,7 +11,11 @@ import com.aliothmoon.maameow.ai.AiScriptRecorder
 import com.aliothmoon.maameow.ai.AndroidMaaToolBridge
 import com.aliothmoon.maameow.ai.DifyChatClient
 import com.aliothmoon.maameow.ai.OpenAiCompatibleChatClient
+import com.aliothmoon.maameow.ai.usage.OpenRouterPriceService
+import com.aliothmoon.maameow.ai.history.AiSessionHistoryManager
+import com.aliothmoon.maameow.ai.jev.JevSystemOneClient
 import com.aliothmoon.maameow.ai.mcp.MaaToolBridge
+import com.aliothmoon.maameow.ai.workspace.AgentWorkspaceManager
 import com.aliothmoon.maameow.data.achievement.AchievementRepository
 import com.aliothmoon.maameow.data.achievement.PallasDrunkState
 import com.aliothmoon.maameow.data.api.CopilotApiService
@@ -439,6 +443,10 @@ val appModule = module {
     singleOf(::AiScriptRecorder)
     singleOf(::DifyChatClient)
     singleOf(::OpenAiCompatibleChatClient)
+    singleOf(::OpenRouterPriceService)
+    singleOf(::JevSystemOneClient)
+    single { AiSessionHistoryManager(androidContext()) }
+    single { AgentWorkspaceManager(androidContext()) }
     single<MaaToolBridge> {
         AndroidMaaToolBridge(
             context = androidContext(),
@@ -458,6 +466,8 @@ val appModule = module {
             httpClient = get(),
             operBoxRepository = get(),
             depotRepository = get(),
+            operBoxYituliuSync = get(),
+            jevClient = getOrNull<JevSystemOneClient>(),
         )
     }
     // 前台模式自动任务

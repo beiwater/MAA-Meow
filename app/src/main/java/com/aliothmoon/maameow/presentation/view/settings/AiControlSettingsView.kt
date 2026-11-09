@@ -32,6 +32,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.Slider
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -80,9 +81,17 @@ fun AiControlSettingsView(
     val openAiBaseUrl by viewModel.aiOpenAiBaseUrl.collectAsStateWithLifecycle()
     val openAiApiKey by viewModel.aiOpenAiApiKey.collectAsStateWithLifecycle()
     val openAiModel by viewModel.aiOpenAiModel.collectAsStateWithLifecycle()
+    val openAiTemperature by viewModel.aiOpenAiTemperature.collectAsStateWithLifecycle()
     val runningEndpoint by viewModel.runningEndpoint.collectAsStateWithLifecycle()
     val isRecording by viewModel.isRecordingScript.collectAsStateWithLifecycle()
     val draftNodes by viewModel.recordedDraftNodes.collectAsStateWithLifecycle()
+    val jevEnabled by viewModel.aiJevEnabled.collectAsStateWithLifecycle()
+    val jevApiKey by viewModel.aiJevApiKey.collectAsStateWithLifecycle()
+    val jevBaseUrl by viewModel.aiJevBaseUrl.collectAsStateWithLifecycle()
+    val jevModel by viewModel.aiJevModel.collectAsStateWithLifecycle()
+    val jevMode by viewModel.aiJevMode.collectAsStateWithLifecycle()
+    val jevToolThreshold by viewModel.aiJevToolThreshold.collectAsStateWithLifecycle()
+    val jevBoxThreshold by viewModel.aiJevBoxThreshold.collectAsStateWithLifecycle()
 
     var portText by remember(port) { mutableStateOf(port.toString()) }
     var urlText by remember(difyBaseUrl) { mutableStateOf(difyBaseUrl) }
@@ -90,10 +99,14 @@ fun AiControlSettingsView(
     var openAiUrlText by remember(openAiBaseUrl) { mutableStateOf(openAiBaseUrl) }
     var openAiKeyText by remember(openAiApiKey) { mutableStateOf(openAiApiKey) }
     var openAiModelText by remember(openAiModel) { mutableStateOf(openAiModel) }
+    var jevKeyText by remember(jevApiKey) { mutableStateOf(jevApiKey) }
+    var jevUrlText by remember(jevBaseUrl) { mutableStateOf(jevBaseUrl) }
+    var jevModelText by remember(jevModel) { mutableStateOf(jevModel) }
+    var jevToolThresholdText by remember(jevToolThreshold) { mutableStateOf(jevToolThreshold) }
+    var jevBoxThresholdText by remember(jevBoxThreshold) { mutableStateOf(jevBoxThreshold) }
     var importText by remember { mutableStateOf("") }
     var scriptNameText by remember { mutableStateOf("AI-录制脚本") }
     var showLanConfirmDialog by remember { mutableStateOf(false) }
-
     // 深链把 URI 放进 relay，这里取出交给同一套导入路径（服务关着也能导入）
     val pendingImport by importRelay.request.collectAsStateWithLifecycle()
     LaunchedEffect(pendingImport) {
@@ -487,6 +500,43 @@ fun AiControlSettingsView(
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth(),
                                 )
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = MaaDesignTokens.Spacing.xs),
+                                ) {
+                                    val tempLabel = when {
+                                        openAiTemperature <= 0.3f -> stringResource(R.string.ai_settings_openai_temp_precise)
+                                        openAiTemperature >= 0.9f -> stringResource(R.string.ai_settings_openai_temp_creative)
+                                        else -> stringResource(R.string.ai_settings_openai_temp_balanced)
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.ai_settings_openai_temperature_title),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                        )
+                                        Text(
+                                            text = stringResource(
+                                                R.string.ai_settings_openai_temperature_desc,
+                                                openAiTemperature,
+                                                tempLabel,
+                                            ),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Slider(
+                                        value = openAiTemperature,
+                                        onValueChange = { viewModel.setAiOpenAiTemperature(kotlin.math.round(it * 10f) / 10f) },
+                                        valueRange = 0.0f..1.5f,
+                                        steps = 14,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
                             }
 
                             AiChatProvider.DIFY -> {
@@ -522,6 +572,131 @@ fun AiControlSettingsView(
                             ) {
                                 Text(stringResource(R.string.ai_settings_open_chat_btn))
                             }
+                        }
+                    }
+                }
+            }
+
+            // §6 Jev 1.14 System 1 决策加速
+            item {
+                SettingsGroupCard {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = MaaDesignTokens.Spacing.sm),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.ai_settings_jev_title),
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    text = stringResource(R.string.ai_settings_jev_enable_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = jevEnabled,
+                                onCheckedChange = { viewModel.setAiJevEnabled(it) },
+                            )
+                        }
+
+                        if (jevEnabled) {
+                            ListItemDivider()
+
+                            Text(
+                                text = stringResource(R.string.ai_settings_jev_mode_title),
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                FilterChip(
+                                    selected = jevMode.equals("SHADOW", ignoreCase = true),
+                                    onClick = { viewModel.setAiJevMode("SHADOW") },
+                                    label = { Text(stringResource(R.string.ai_settings_jev_mode_shadow)) },
+                                )
+                                FilterChip(
+                                    selected = jevMode.equals("CASCADE", ignoreCase = true),
+                                    onClick = { viewModel.setAiJevMode("CASCADE") },
+                                    label = { Text(stringResource(R.string.ai_settings_jev_mode_cascade)) },
+                                )
+                                FilterChip(
+                                    selected = jevMode.equals("OFF", ignoreCase = true),
+                                    onClick = { viewModel.setAiJevMode("OFF") },
+                                    label = { Text(stringResource(R.string.ai_settings_jev_mode_off)) },
+                                )
+                            }
+
+                            OutlinedTextField(
+                                value = jevUrlText,
+                                onValueChange = {
+                                    jevUrlText = it
+                                    viewModel.setAiJevBaseUrl(it)
+                                },
+                                label = { Text(stringResource(R.string.ai_settings_jev_url_label)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+
+                            OutlinedTextField(
+                                value = jevKeyText,
+                                onValueChange = {
+                                    jevKeyText = it
+                                    viewModel.setAiJevApiKey(it)
+                                },
+                                label = { Text(stringResource(R.string.ai_settings_jev_key_label)) },
+                                visualTransformation = PasswordVisualTransformation(),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+
+                            OutlinedTextField(
+                                value = jevModelText,
+                                onValueChange = {
+                                    jevModelText = it
+                                    viewModel.setAiJevModel(it)
+                                },
+                                label = { Text(stringResource(R.string.ai_settings_jev_model_label)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+
+                            OutlinedTextField(
+                                value = jevToolThresholdText,
+                                onValueChange = {
+                                    jevToolThresholdText = it
+                                    viewModel.setAiJevToolThreshold(it)
+                                },
+                                label = {
+                                    Text(stringResource(R.string.ai_settings_jev_tool_threshold_label, jevToolThresholdText))
+                                },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+
+                            OutlinedTextField(
+                                value = jevBoxThresholdText,
+                                onValueChange = {
+                                    jevBoxThresholdText = it
+                                    viewModel.setAiJevBoxThreshold(it)
+                                },
+                                label = {
+                                    Text(stringResource(R.string.ai_settings_jev_box_threshold_label, jevBoxThresholdText))
+                                },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
                         }
                     }
                 }

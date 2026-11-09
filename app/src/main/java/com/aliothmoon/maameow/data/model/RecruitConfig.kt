@@ -176,7 +176,12 @@ data class RecruitConfig(
      * 对应 WPF: ChooseLevel6（IsEnabled=False）
      * 注意: 此选项在WPF中被禁用，仅作保留
      */
-    val chooseLevel6: Boolean = false
+    val chooseLevel6: Boolean = false,
+
+    /**
+     * 自动确认招募（下发 confirm 字段，默认 true）
+     */
+    val autoConfirm: Boolean = true,
 ) : TaskParamProvider {
     /**
      * 计算三星总时长（分钟）
@@ -250,7 +255,7 @@ data class RecruitConfig(
             if (chooseLevel4) add(4)
             if (chooseLevel5) add(5)
         }
-        val confirmList = selectList // 选择即确认
+        val confirmList = if (autoConfirm) selectList else emptyList() // 自动确认招募
 
         val paramsJson = buildJsonObject {
             put("refresh", refreshLevel3)

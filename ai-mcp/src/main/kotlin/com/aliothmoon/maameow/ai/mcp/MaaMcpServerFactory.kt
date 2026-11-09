@@ -184,6 +184,16 @@ object MaaMcpServerFactory {
             )
         }
 
+        addTool("maa_execute_adhoc") { req ->
+            val tasks = req.arguments?.get("tasks") as? JsonArray
+                ?: return@addTool errorResult("Missing required 'tasks' array")
+            val force = (req.arguments?.get("force") as? JsonPrimitive)?.booleanOrNull ?: true
+            bridge.executeAdHoc(tasks, force).fold(
+                onSuccess = { okResult(json.encodeToString(it)) },
+                onFailure = { errorResult(it.message ?: "Failed to execute ad-hoc task") },
+            )
+        }
+
         addTool("maa_stop") {
             bridge.stop().fold(
                 onSuccess = { okResult(buildJsonObject { put("stopped", it) }.toString()) },
@@ -277,7 +287,8 @@ object MaaMcpServerFactory {
         addTool("maa_get_user_data") { req ->
             val category = (req.arguments?.get("category") as? JsonPrimitive)?.contentOrNull?.trim()?.lowercase() ?: "all"
             val filter = (req.arguments?.get("filter") as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
-            bridge.getUserData(category, filter).fold(
+            val refresh = (req.arguments?.get("refresh") as? JsonPrimitive)?.booleanOrNull ?: false
+            bridge.getUserData(category, filter, refresh).fold(
                 onSuccess = { okResult(json.encodeToString(it)) },
                 onFailure = { errorResult(it.message ?: "Failed to get user data") },
             )
@@ -299,7 +310,10 @@ object MaaMcpServerFactory {
             val y = (req.arguments?.get("y") as? JsonPrimitive)?.intOrNull
                 ?: return@addTool errorResult("Missing or invalid 'y' coordinate")
             bridge.click(x, y).fold(
-                onSuccess = { okResult("Click dispatched successfully to ($x, $y)") },
+                onSuccess = {
+                    if (it) okResult("Click dispatched successfully to ($x, $y)")
+                    else errorResult("MaaCore rejected the click at ($x, $y)")
+                },
                 onFailure = { errorResult(it.message ?: "Failed to execute click") },
             )
         }
@@ -308,6 +322,69 @@ object MaaMcpServerFactory {
             bridge.backToHome().fold(
                 onSuccess = { okResult("BackToHome routine executed successfully") },
                 onFailure = { errorResult(it.message ?: "Failed to execute BackToHome") },
+            )
+        }
+
+        addTool("maa_visual_click") { req ->
+            val instruction = (req.arguments?.get("instruction") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            if (instruction.isEmpty()) return@addTool errorResult("Missing required 'instruction'")
+            bridge.visualClick(instruction).fold(
+                onSuccess = { okResult(json.encodeToString(it)) },
+                onFailure = { errorResult(it.message ?: "Failed to execute visual click") },
+            )
+        }
+        addTool("maa_execute_ui_plan") { req ->
+            val args = req.arguments ?: return@addTool errorResult("Missing arguments object")
+            bridge.executeUiPlan(args).fold(
+                onSuccess = { okResult(json.encodeToString(it)) },
+                onFailure = { errorResult(it.message ?: "Failed to execute UI plan") },
+            )
+        }
+
+        addTool("maa_save_workspace_file") { req ->
+            val name = (req.arguments?.get("name") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            if (name.isEmpty()) return@addTool errorResult("Missing required 'name'")
+            val content = (req.arguments?.get("content") as? JsonPrimitive)?.contentOrNull
+                ?: return@addTool errorResult("Missing required 'content'")
+            val description = (req.arguments?.get("description") as? JsonPrimitive)?.contentOrNull?.trim()
+            bridge.saveWorkspaceFile(name, content, description).fold(
+                onSuccess = { okResult(json.encodeToString(it)) },
+                onFailure = { errorResult(it.message ?: "Failed to save workspace file") },
+            )
+        }
+
+        addTool("maa_read_workspace_file") { req ->
+            val name = (req.arguments?.get("name") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            if (name.isEmpty()) return@addTool errorResult("Missing required 'name'")
+            bridge.readWorkspaceFile(name).fold(
+                onSuccess = { okResult(it) },
+                onFailure = { errorResult(it.message ?: "Failed to read workspace file") },
+            )
+        }
+
+        addTool("maa_list_workspace_files") { _ ->
+            bridge.listWorkspaceFiles().fold(
+                onSuccess = { okResult(json.encodeToString(it)) },
+                onFailure = { errorResult(it.message ?: "Failed to list workspace files") },
+            )
+        }
+
+        addTool("maa_run_workspace_script") { req ->
+            val name = (req.arguments?.get("name") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            if (name.isEmpty()) return@addTool errorResult("Missing required 'name'")
+            val force = (req.arguments?.get("force") as? JsonPrimitive)?.booleanOrNull ?: true
+            bridge.runWorkspaceScript(name, force).fold(
+                onSuccess = { okResult(json.encodeToString(it)) },
+                onFailure = { errorResult(it.message ?: "Failed to run workspace script") },
+            )
+        }
+
+        addTool("maa_delete_workspace_file") { req ->
+            val name = (req.arguments?.get("name") as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            if (name.isEmpty()) return@addTool errorResult("Missing required 'name'")
+            bridge.deleteWorkspaceFile(name).fold(
+                onSuccess = { okResult(buildJsonObject { put("deleted", it); put("name", name) }.toString()) },
+                onFailure = { errorResult(it.message ?: "Failed to delete workspace file") },
             )
         }
 

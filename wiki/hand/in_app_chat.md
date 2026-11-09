@@ -106,13 +106,13 @@ sequenceDiagram
 
 | 项 | 值 / 行为 |
 |---|---|
-| 每回合最多轮次 | `MAX_TOOL_ROUNDS = 6`（一轮 = 请求 → 执行工具 → 再请求） |
-| 每回合最多工具调用 | `MAX_TOOL_CALLS = 8`（跨轮累计） |
-| 触顶 | 不再执行，正文追加「已达到本轮工具调用上限（6 轮 / 8 次），先停在这里；如需继续请再发一条消息。」（`ai_chat_tool_limit_reached`） |
+| 每回合最多轮次 | `ChatToolLoop.DEFAULT_MAX_ROUNDS = 32`（一轮 = 一次模型请求；最后允许轮次请求的工具仍会执行） |
+| 每回合最多工具调用 | `ChatToolLoop.DEFAULT_MAX_CALLS = 64`（跨轮累计） |
+| 触顶 | 不再执行，正文追加「已达到本轮工具调用上限（32 轮 / 64 次），先停在这里；如需继续请再发一条消息。」（`ai_chat_tool_limit_reached`） |
 | 停止按钮 | 取消协程；每执行下一个工具前 `coroutineContext.ensureActive()`，已请求但未执行的工具不会跑；正在进行的 SSE 由 `call.cancel()` 中止 |
-| 工具卡片 | 先建为「执行中…」（`ai_chat_tool_running`），完成后显示结果；入参展示截断 240 字、observation 展示截断 280 字，卡片存储上限 400 字，模型收到完整结果 |
+| 工具卡片 | 默认折叠为调用数量；展开分组后可再展开单个工具查看完整入参、最多 400 字的结果摘要及截图/日志。截图只在展开时解码，模型通过独立图像消息查看原图 |
 
-一轮内的多个工具调用串行执行；工具结果以 `role: "tool"`（带 `tool_call_id`）回灌，assistant 的 `tool_calls` 消息也会一并回灌，模型才知道自己请求过什么。
+一轮内的多个工具调用串行执行；工具结果以 `role: "tool"`（带 `tool_call_id`）回灌，assistant 的 `tool_calls` 消息也会一并回灌，模型才知道自己请求过什么。若工具执行产生截图（如 `maa_screenshot` 或 `maa_visual_click`），会从工具文本结果中剥离 base64 并通过 OpenAI `image_url` 多模态 user 消息回灌给模型，保证工具协议完整、模型可直接感知画面且卡片保留原有截图。
 
 ### 3.3 系统提示词与 grounding 规则
 
@@ -131,20 +131,20 @@ sequenceDiagram
 | 1 | 需要事实先查工具 | 状态/进度→`maa_status`；配置→`maa_list_profiles` / `maa_get_profile`；干员与仓库→`maa_get_user_data`；游戏知识→`maa_search_wiki`，需全文再用 `maa_get_wiki_article` |
 | 2 | 不许编造 | 关卡 id、干员名、任务类型、参数字段都必须来自工具；查不到就直说并列出候选 |
 | 3 | 先查 schema | 配置结构不确定时先 `maa_list_task_types`，再 `maa_create_profile` / `maa_update_profile` |
-| 4 | 长任务不阻塞 | `maa_run_profile` 拿到 `run_id` 后轮询 `maa_status` 再回报 |
-| 5 | 触屏只用于排障 | `maa_click` 仅关闭意外弹窗/公告/网络错误，禁止手动打关或刷图 |
+| 4 | 长任务不阻塞 | 拿到 `run_id` 后立即回报已转入后台；用户主动询问进度时才查 `maa_status`，不循环等待 |
+| 5 | 依据截图操作 | 可处理弹窗或执行用户已授权的界面导航；Jev 失败时主模型可依据本轮截图使用 `maa_click`，不得猜坐标或手动打关刷图 |
 | 6 | 截图遵守设置 | `maa_screenshot` 被拒绝时不要反复重试，提示用户去设置开启 |
 | 7 | 破坏性操作先说明 | `maa_delete_profile`、`maa_stop`、`force=true` 抢占运行中任务，执行前先用一句话说明后果 |
 
 ### 3.4 思考通道
 
-推理模型的思维链走独立通道：OpenRouter 的 `delta.reasoning` 与 DeepSeek 的 `delta.reasoning_content` 被解析为 `ChatStreamEvent.ThinkingDelta`，累积到 `AiChatMessage.thinking`，UI 渲染为可折叠的「思考中… (N 字)」（`ai_chat_thinking_header`）。回答开始前默认展开（配合 `...` 占位避免「看起来卡死」），一旦出现正文自动折叠，仍可手动点开查看。最终回答依旧只取 `delta.content`，思考内容不会混进正文。
+推理模型的思维链走独立通道：OpenRouter 的 `delta.reasoning` 与 DeepSeek 的 `delta.reasoning_content` 被解析为 `ChatStreamEvent.ThinkingDelta`，累积到 `AiChatMessage.thinking`，UI 渲染为可折叠状态栏（思考中… / 思考过程及字数，`ai_chat_thinking_header` / `ai_chat_thinking_finished`）。为避免侵占屏幕空间，默认收起为紧凑提示，用户可随时手动展开查阅完整思考过程。最终回答依旧只取 `delta.content`，思考内容不会混进正文。
 
 ### 3.5 能力边界
 
 - **工具执行依赖 AI 控制已开启**：关闭时 `tools` 为空列表，请求里根本不带 `tools` 字段，也不执行任何工具；提示词会如实说明「AI 控制已关闭，无法执行设备操作」。
 - 工具循环的中间消息（assistant `tool_calls`、`role:"tool"`）只存在于本次请求的本地工作副本，不写回 UI 消息列表；UI 只显示最终正文与工具卡片。
-- 每回合上限固定 6 轮 / 8 次，无「继续执行」按钮；需要更多调用请再发一条消息。
+- 每回合上限为 32 轮 / 64 次，无「继续执行」按钮；需要更多调用请再发一条消息。
 
 ---
 
@@ -176,7 +176,7 @@ sequenceDiagram
 
 卡片副标题为 `aiChatTargetLabel`（`服务商 · 模型`），未填密钥时显示「未配置模型密钥」。对话页顶部标题为「AI 助手对话」，并提供「清空当前会话」。
 
-键盘弹出时 `MainScreen` 会隐藏底栏（`WindowInsets.isImeVisible`），对话页用 `Scaffold(contentWindowInsets = WindowInsets(0))` + `Modifier.imePadding()` 自行避让 IME，避免输入框被键盘遮住或与底栏 inset 叠加。
+键盘弹出时 `MainScreen` 会隐藏底栏（`WindowInsets.isImeVisible`），对话页用 `Scaffold(contentWindowInsets = WindowInsets(0))` + `Modifier.imePadding()` 自行避让 IME，避免输入框被键盘遮住或与底栏 inset 叠加。输入框采用 `rememberSaveable` 保护草稿；自动滚动采用贴底跟随策略，向上滑动阅读时不打扰用户，并提供浮动「回到底部」操作；多轮工具调用默认折叠为紧凑汇总条，展开后按卡片独立折叠且按需解码截图/日志，任务运行期间停止按钮始终常驻可达。
 
 ---
 
@@ -306,6 +306,15 @@ adb reverse tcp:18081 tcp:18081
    再以 `data: [DONE]` 结束，App 应在本地执行 `maa_status`、显示对应工具卡片，并用 `role:"tool"` 再发一次请求。
 
 > 若使用真实服务商（DeepSeek / OpenAI / Kimi / SiliconFlow），把 Base URL 换成对应 `https://.../v1` 即可，无需 `adb reverse`。Ollama 同理：`adb reverse tcp:11434 tcp:11434` 后填 `http://127.0.0.1:11434/v1`。
+
+### 7.4 真实设备验收
+
+- 保留用户原有语言、模型与会话；英文服使用实际英文按钮名，不靠切换到中文绕过定位问题。
+- 使用真实模型和游戏：在同一回合内连续执行两轮「进入 `Operator` → 截图确认干员列表 → 返回 → 截图确认大厅」，验证执行能跨过旧六轮限制；禁止升级、作战或花费资源。
+- Jev 的低置信度结果必须不点击；主模型收到真正的图像后，才能依据截图定位接手。点击结果只证明派发，页面变化须由后续截图证实。
+- 实点工具分组展开/收起、单卡截图和日志、向上阅读与回到底部；离屏返回后应保留用户选择的折叠状态。
+- 在真实长回复中点击停止，确认停止控件消失、正文不再增长；输入草稿在切换页签或配置变化后保留，后台任务运行不阻止继续发送消息。
+
 
 ---
 

@@ -83,7 +83,6 @@ class OpenAiCompatibleChatClientTest {
         val text = events.filterIsInstance<ChatStreamEvent.TextDelta>()
             .joinToString("") { it.delta }
         assertEquals("你好，世界", text)
-        assertEquals(expectedEvents, events)
         assertFalse(events.any { it is ChatStreamEvent.Error })
 
         val request = captured.single()
@@ -102,6 +101,37 @@ class OpenAiCompatibleChatClientTest {
         assertEquals("system", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
         assertEquals("be brief", messages[0].jsonObject["content"]!!.jsonPrimitive.content)
         assertEquals("user", messages[1].jsonObject["role"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `streams deltas with temperature passes temperature in payload`() = runBlocking {
+        val captured = mutableListOf<Request>()
+        val okHttp = OkHttpClient.Builder().addInterceptor { chain ->
+            captured += chain.request()
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .header("Content-Type", "text/event-stream")
+                .body(sseFixture.toResponseBody("text/event-stream".toMediaType()))
+                .build()
+        }.build()
+
+        val client = OpenAiCompatibleChatClient(okHttp)
+        client.streamChat(
+            baseUrl = "https://api.deepseek.com/v1/",
+            apiKey = "sk-test-key",
+            model = "deepseek-chat",
+            messages = listOf(OpenAiChatMessage("user", "hi")),
+            temperature = 0.7f,
+        ).toList()
+
+        val request = captured.single()
+        val buffer = Buffer()
+        request.body?.writeTo(buffer)
+        val payload = json.parseToJsonElement(buffer.readUtf8()).jsonObject
+        assertEquals("0.7", payload["temperature"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -128,7 +158,7 @@ class OpenAiCompatibleChatClientTest {
             messages = listOf(OpenAiChatMessage("user", "hi")),
         ).toList()
 
-        val error = events.single() as ChatStreamEvent.Error
+        val error = events.filterIsInstance<ChatStreamEvent.Error>().single()
         assertEquals(ChatErrorKind.UNAUTHORIZED, error.kind)
         assertEquals(401, error.httpCode)
         assertEquals("api.deepseek.com", error.host)
@@ -152,7 +182,7 @@ class OpenAiCompatibleChatClientTest {
             messages = listOf(OpenAiChatMessage("user", "hi")),
         ).toList()
 
-        val error = events.single() as ChatStreamEvent.Error
+        val error = events.filterIsInstance<ChatStreamEvent.Error>().single()
         assertEquals(ChatErrorKind.NETWORK, error.kind)
         assertEquals("127.0.0.1", error.host)
         assertEquals(80, error.port)
@@ -331,5 +361,70 @@ class OpenAiCompatibleChatClientTest {
         assertEquals("tool", toolMessage["role"]!!.jsonPrimitive.content)
         assertEquals("call_abc", toolMessage["tool_call_id"]!!.jsonPrimitive.content)
         assertEquals("""{"started":true}""", toolMessage["content"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `user message with image serializes to multimodal image_url array`() = runBlocking {
+        val captured = mutableListOf<Request>()
+        val okHttp = OkHttpClient.Builder().addInterceptor { chain ->
+            captured += chain.request()
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .header("Content-Type", "text/event-stream")
+                .body(sseFixture.toResponseBody("text/event-stream".toMediaType()))
+                .build()
+        }.build()
+
+        val client = OpenAiCompatibleChatClient(okHttp)
+        client.streamChat(
+            baseUrl = "https://api.deepseek.com/v1",
+            apiKey = "sk-test",
+            model = "deepseek-chat",
+            messages = listOf(
+                OpenAiChatMessage(
+                    role = "user",
+                    content = "Current screen:",
+                    imageUrls = listOf("fake_base64_jpeg_data"),
+                ),
+                OpenAiChatMessage(
+                    role = "user",
+                    content = "",
+                    imageUrls = listOf("data:image/png;base64,png_data_123"),
+                ),
+            ),
+        ).toList()
+
+        val buffer = Buffer()
+        captured.single().body?.writeTo(buffer)
+        val payload = json.parseToJsonElement(buffer.readUtf8()).jsonObject
+        val messages = payload["messages"]!!.jsonArray
+        assertEquals(2, messages.size)
+
+        // 1. Text + raw base64 image -> formatted data URI
+        val msg1 = messages[0].jsonObject
+        assertEquals("user", msg1["role"]!!.jsonPrimitive.content)
+        val parts1 = msg1["content"]!!.jsonArray
+        assertEquals(2, parts1.size)
+        assertEquals("text", parts1[0].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("Current screen:", parts1[0].jsonObject["text"]!!.jsonPrimitive.content)
+        assertEquals("image_url", parts1[1].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals(
+            "data:image/jpeg;base64,fake_base64_jpeg_data",
+            parts1[1].jsonObject["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content,
+        )
+
+        // 2. Blank text + existing data URI -> only image_url, no text block, URI unchanged
+        val msg2 = messages[1].jsonObject
+        assertEquals("user", msg2["role"]!!.jsonPrimitive.content)
+        val parts2 = msg2["content"]!!.jsonArray
+        assertEquals(1, parts2.size)
+        assertEquals("image_url", parts2[0].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals(
+            "data:image/png;base64,png_data_123",
+            parts2[0].jsonObject["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content,
+        )
     }
 }

@@ -149,4 +149,7 @@ interface RemoteService {
 
     // 不跑任务单独拉起游戏，后台模式需先建好虚拟屏
     boolean launchGame(String packageName) = 61;
+
+    // 执行基于标准 1280x720 分辨率的游戏滑动手势，基于真实游戏显示分辨率映射；不可用时返回 false
+    boolean swipeGame(int startX, int startY, int endX, int endY, int durationMs) = 62;
 }

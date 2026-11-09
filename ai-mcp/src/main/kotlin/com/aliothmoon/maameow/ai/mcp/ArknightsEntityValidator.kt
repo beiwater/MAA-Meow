@@ -56,6 +56,12 @@ class ArknightsEntityValidator(
         }
     }
 
+    fun resolveStageCode(stageInput: String): String? {
+        val trimmed = stageInput.trim()
+        if (trimmed.isEmpty()) return null
+        return normalizedStages[trimmed.uppercase()]
+    }
+
     fun validateStage(stageInput: String, path: String = "stage1"): ValidationError? {
         val trimmed = stageInput.trim()
         if (trimmed.isEmpty()) return null // Empty stage means default/current/last stage in MAA FightConfig

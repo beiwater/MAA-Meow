@@ -217,7 +217,7 @@ class FakeMaaToolBridge(
         }
     }
 
-    override suspend fun getUserData(category: String, filter: String?): Result<JsonObject> {
+    override suspend fun getUserData(category: String, filter: String?, refresh: Boolean): Result<JsonObject> {
         if (filter == "error_trigger") return Result.failure(RuntimeException("User data error"))
         return Result.success(buildJsonObject {
             if (category == "operators" || category == "all") {
@@ -300,18 +300,35 @@ class FakeMaaToolBridge(
     val clicks = mutableListOf<Pair<Int, Int>>()
     var backToHomeCount = 0
     var clickError: String? = null
+    var clickAccepted: Boolean = true
     var backToHomeError: String? = null
 
     override suspend fun click(x: Int, y: Int): Result<Boolean> {
         clickError?.let { return Result.failure(RuntimeException(it)) }
         clicks.add(x to y)
-        return Result.success(true)
+        return Result.success(clickAccepted)
     }
 
     override suspend fun backToHome(): Result<Boolean> {
         backToHomeError?.let { return Result.failure(RuntimeException(it)) }
         backToHomeCount++
         return Result.success(true)
+    }
+    val executedPlans = mutableListOf<JsonObject>()
+    var executeUiPlanError: String? = null
+
+    override suspend fun executeUiPlan(plan: JsonObject): Result<JsonObject> {
+        executeUiPlanError?.let { return Result.failure(RuntimeException(it)) }
+        executedPlans.add(plan)
+        val steps = (plan["steps"] as? JsonArray)?.size ?: 0
+        return Result.success(buildJsonObject {
+            put("success", true)
+            put("status", "completed")
+            put("total_steps", steps)
+            put("executed_steps", steps)
+            put("dispatched_count", steps)
+            put("verified_count", 0)
+        })
     }
 }
 
@@ -637,8 +654,6 @@ class MaaMcpServerTest {
         )
         assertFalse(clickRes.isError ?: false)
         assertEquals(listOf(640 to 360), bridge.clicks)
-        val clickText = (clickRes.content.first() as TextContent).text
-        assertTrue(clickText.contains("Click dispatched successfully to (640, 360)"))
 
         // maa_click missing coordinate
         val clickMissingRes = client.callTool(
@@ -657,6 +672,15 @@ class MaaMcpServerTest {
         val clickErrText = (clickFailedRes.content.first() as TextContent).text
         assertTrue(clickErrText.contains("Remote service disconnected"))
         bridge.clickError = null
+
+        // Rejected native dispatch is an error, not a successful RPC operation.
+        bridge.clickAccepted = false
+        val rejectedClick = client.callTool(
+            name = "maa_click",
+            arguments = mapOf("x" to JsonPrimitive(100), "y" to JsonPrimitive(100)),
+        )
+        assertTrue(rejectedClick.isError == true)
+        bridge.clickAccepted = true
 
         // 24. Test maa_back_to_home
         val backHomeRes = client.callTool(

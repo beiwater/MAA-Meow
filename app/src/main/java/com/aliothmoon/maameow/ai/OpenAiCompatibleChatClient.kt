@@ -1,6 +1,9 @@
 package com.aliothmoon.maameow.ai
 
 import com.aliothmoon.maameow.ai.mcp.MaaToolSpec
+import com.aliothmoon.maameow.ai.usage.AiRequestUsage
+import java.math.BigDecimal
+import java.util.UUID
 import com.aliothmoon.maameow.utils.JsonUtils
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -19,6 +22,7 @@ import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -36,9 +40,10 @@ import java.io.IOException
 @Serializable
 data class OpenAiChatMessage(
     val role: String,
-    val content: String,
+    val content: String = "",
     val toolCalls: List<OpenAiToolCall> = emptyList(),
     val toolCallId: String? = null,
+    val imageUrls: List<String> = emptyList(),
 )
 
 /** 一次完整的工具调用（流式增量已在 [ToolCallAccumulator] 里拼好）。 */
@@ -108,6 +113,8 @@ sealed interface ChatStreamEvent {
     /** 流结束且本轮请求了工具调用；[calls] 已按 index 拼好、可直接执行。 */
     data class ToolCallsReady(val calls: List<OpenAiToolCall>) : ChatStreamEvent
 
+    data class Usage(val usage: AiRequestUsage) : ChatStreamEvent
+
     data class Completed(val finishReason: String?) : ChatStreamEvent
 
     /**
@@ -164,7 +171,7 @@ internal class ToolCallAccumulator {
  * 流式解析直接读 `response.body.source()`，不整体缓冲响应体。
  */
 class OpenAiCompatibleChatClient(
-    private val httpClient: OkHttpClient,
+    internal val httpClient: OkHttpClient,
 ) {
     companion object {
         const val DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
@@ -210,11 +217,26 @@ class OpenAiCompatibleChatClient(
         messages: List<OpenAiChatMessage>,
         systemPrompt: String = "",
         tools: List<MaaToolSpec> = emptyList(),
+        temperature: Float? = null,
     ): Flow<ChatStreamEvent> = callbackFlow {
         val endpoint = buildEndpoint(baseUrl)
+        val requestUrl = endpoint.toHttpUrl()
         val payload = buildJsonObject {
             put("model", model.trim().ifBlank { DEFAULT_MODEL })
+            if (requestUrl.host == "openrouter.ai") {
+                // Share the stable agent prefix across turns; this is a routing hint, not a cache guarantee.
+                put("prompt_cache_key", "maameow-agent-v1")
+            }
             put("stream", true)
+            put(
+                "stream_options",
+                buildJsonObject {
+                    put("include_usage", true)
+                },
+            )
+            if (temperature != null) {
+                put("temperature", temperature)
+            }
             put(
                 "messages",
                 buildJsonArray {
@@ -236,7 +258,7 @@ class OpenAiCompatibleChatClient(
         }
 
         val request = Request.Builder()
-            .url(endpoint)
+            .url(requestUrl)
             .addHeader("Authorization", "Bearer ${apiKey.trim()}")
             .addHeader("Accept", "text/event-stream")
             .post(json.encodeToString(payload).toRequestBody(jsonMediaType))
@@ -244,6 +266,13 @@ class OpenAiCompatibleChatClient(
 
         val host = request.url.host
         val port = request.url.port
+        val streamRequestId = "stream_${UUID.randomUUID()}"
+        trySend(ChatStreamEvent.Usage(AiRequestUsage(
+            requestId = streamRequestId,
+            source = "LLM",
+            model = model,
+            baseUrl = baseUrl,
+        )))
         val call = httpClient.newCall(request)
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
@@ -290,7 +319,12 @@ class OpenAiCompatibleChatClient(
                             if (line.isBlank() || line.startsWith(":")) continue
                             if (!line.startsWith("data:")) continue
                             val dataPayload = line.removePrefix("data:").trim()
-                            parseSseData(dataPayload).forEach { event ->
+                            parseSseData(
+                                dataPayload = dataPayload,
+                                fallbackModel = model,
+                                baseUrl = baseUrl,
+                                streamRequestId = streamRequestId,
+                            ).forEach { event ->
                                 when (event) {
                                     is ChatStreamEvent.ToolCallDelta -> accumulator.apply(event)
                                     is ChatStreamEvent.Completed -> {
@@ -298,8 +332,10 @@ class OpenAiCompatibleChatClient(
                                             toolsFlushed = true
                                             trySend(ChatStreamEvent.ToolCallsReady(accumulator.build()))
                                         }
-                                        terminated = true
-                                        trySend(event)
+                                        if (!terminated) {
+                                            terminated = true
+                                            trySend(event)
+                                        }
                                     }
                                     else -> trySend(event)
                                 }
@@ -348,7 +384,7 @@ class OpenAiCompatibleChatClient(
         else -> "user"
     }
 
-    private fun OpenAiChatMessage.toWireJson(): JsonObject = when (normalizeRole(role)) {
+    private fun OpenAiChatMessage.toWireJson(): JsonObject = when (val normRole = normalizeRole(role)) {
         "assistant" -> if (toolCalls.isEmpty()) {
             buildJsonObject {
                 put("role", "assistant")
@@ -382,8 +418,47 @@ class OpenAiCompatibleChatClient(
             put("content", content)
         }
 
+        "user" -> buildJsonObject {
+            put("role", "user")
+            if (imageUrls.isEmpty()) {
+                put("content", content)
+            } else {
+                put(
+                    "content",
+                    buildJsonArray {
+                        if (content.isNotBlank()) {
+                            add(
+                                buildJsonObject {
+                                    put("type", "text")
+                                    put("text", content)
+                                },
+                            )
+                        }
+                        imageUrls.forEach { image ->
+                            val url = image.trim()
+                            val formatted = when {
+                                url.startsWith("data:") || url.startsWith("http://") || url.startsWith("https://") -> url
+                                else -> "data:image/jpeg;base64,$url"
+                            }
+                            add(
+                                buildJsonObject {
+                                    put("type", "image_url")
+                                    put(
+                                        "image_url",
+                                        buildJsonObject {
+                                            put("url", formatted)
+                                        },
+                                    )
+                                },
+                            )
+                        }
+                    },
+                )
+            }
+        }
+
         else -> buildJsonObject {
-            put("role", normalizeRole(role))
+            put("role", normRole)
             put("content", content)
         }
     }
@@ -429,7 +504,12 @@ class OpenAiCompatibleChatClient(
      * - `choices[0].finish_reason` 非空 → [ChatStreamEvent.Completed]
      * - 空 delta / 心跳 / 非 JSON → 空列表
      */
-    internal fun parseSseData(dataPayload: String): List<ChatStreamEvent> {
+    internal fun parseSseData(
+        dataPayload: String,
+        fallbackModel: String = "",
+        baseUrl: String = "",
+        streamRequestId: String = "",
+    ): List<ChatStreamEvent> {
         if (dataPayload.isBlank()) return emptyList()
         if (dataPayload == "[DONE]") return listOf(ChatStreamEvent.Completed(null))
 
@@ -446,9 +526,48 @@ class OpenAiCompatibleChatClient(
             )
         }
 
-        val choice = (obj["choices"] as? JsonArray)?.firstOrNull() as? JsonObject ?: return emptyList()
-        val events = ArrayList<ChatStreamEvent>(3)
+        val events = ArrayList<ChatStreamEvent>(4)
 
+        val usageObj = obj["usage"] as? JsonObject
+        if (usageObj != null) {
+            val providerId = (obj["id"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+            val reqId = streamRequestId.takeIf { it.isNotBlank() } ?: providerId ?: UUID.randomUUID().toString()
+            val respModel = (obj["model"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+                ?: fallbackModel
+
+            val inputTokens = (usageObj["prompt_tokens"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+                ?: (usageObj["input_tokens"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+            val outputTokens = (usageObj["completion_tokens"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+                ?: (usageObj["output_tokens"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+
+            val details = usageObj["prompt_tokens_details"] as? JsonObject
+            val cachedTokens = (details?.get("cached_tokens") as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+                ?: (usageObj["cached_tokens"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+                ?: (usageObj["cached_input_tokens"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+
+            val rawCost = (usageObj["cost"] as? JsonPrimitive)?.contentOrNull
+            val costStr = rawCost?.let { raw ->
+                runCatching { BigDecimal(raw).toPlainString() }.getOrDefault(raw)
+            }
+
+            if (inputTokens != null || outputTokens != null || cachedTokens != null || costStr != null) {
+                events += ChatStreamEvent.Usage(
+                    AiRequestUsage(
+                        requestId = reqId,
+                        source = "LLM",
+                        model = respModel,
+                        baseUrl = baseUrl,
+                        inputTokens = inputTokens,
+                        outputTokens = outputTokens,
+                        cachedInputTokens = cachedTokens,
+                        reportedCostUsd = costStr,
+                        providerRequestId = providerId,
+                    ),
+                )
+            }
+        }
+
+        val choice = (obj["choices"] as? JsonArray)?.firstOrNull() as? JsonObject ?: return events
         val delta = choice["delta"] as? JsonObject
         if (delta != null) {
             // 推理模型的思维链：OpenRouter 用 reasoning，DeepSeek 用 reasoning_content

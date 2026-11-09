@@ -33,6 +33,12 @@ object PrimaryDisplayManager {
     private fun getDisplayInfo(): DisplayInfo {
         return ServiceManager.getDisplayManager().getDisplayInfo(DISPLAY_ID)
     }
+    fun currentResolution(): Pair<Int, Int>? = runCatching {
+        val info = displayInfo.get() ?: getDisplayInfo()
+        val size = info.size()
+        Pair(size.width(), size.height())
+    }.getOrNull()
+
 
     private val listenerHandler by lazy {
         FrameCaptureHelper.createCaptureHandler("DisplayListener")

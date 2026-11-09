@@ -16,7 +16,7 @@
   - 承载明日方舟专用知识库（`scripts/build_rag_corpus.py` 从 `MaaResource`、PRTS、`ArknightsGameData`、`item_index.json`、`prts.plus`、企鹅物流提取按实体切块的语料）与 Agent 工具循环。
 - **应用内聊天（薄客户端）**：
   - 双后端可选：默认走 OpenAI 兼容 `POST {baseUrl}/chat/completions`（`OpenAiCompatibleChatClient`），也可切回 Dify 应用 API `/v1/chat-messages`（`DifyChatClient`）；
-  - 两者均为 SSE 流式，并复用已有 OkHttpClient 与 Markdown 渲染；OpenAI 兼容后端还会在本地执行模型请求的 20 个 MCP 工具（见 5.7）。
+  - 两者均为 SSE 流式，并复用已有 OkHttpClient 与 Markdown 渲染；OpenAI 兼容后端还会在本地执行模型请求的 MCP 工具（见 5.7）。
 
 ---
 
@@ -40,10 +40,12 @@
 | `maa_screenshot` | 无 | 返回当前游戏画面 JPEG Base64（**默认关闭**，需在设置中显式开启「允许 AI 获取游戏截图」） | `FrameSnapshotter` (`RemoteService.captureFrameJpeg`) |
 | `maa_load_copilot` | `copilot`, `config?` | 解析 `maa://` / `prts://` 作业码或 JSON 并异步启动自动战斗 | `CopilotManager` + `MaaCompositionService.startCopilot` |
 | `maa_search_wiki` | `query`, `wiki?` ("auto"\|"prts"\|"wiki_gg"), `limit?` (默认5) | 在线联网检索明日方舟 PRTS Wiki (简中原生) 或海外 Arknights Terra Wiki (`arknights.wiki.gg`，Cloudflare CDN 极速)，支持双源智能路由与海外网络超时自动降级 | MediaWiki API (PRTS / wiki.gg) + `OkHttpClient` |
-| `maa_get_user_data` | `category?` ("operators"\|"depot"\|"all", 默认"all"), `filter?` (干员名或物品名过滤) | 查询玩家真实干员箱（星级、精二、等级、潜能、专精、模组）与仓库库存，支持个性化与千人千面自适应 | `OperBoxRepository` + `DepotRepository` + `ItemHelper` |
+| `maa_get_user_data` | `category?` ("operators"\|"depot"\|"all", 默认"all"), `filter?` (干员名或物品名/ID), `refresh?` (boolean，默认false) | 默认读取带时间与来源信息的缓存快照；`refresh=true` 复用既有识别/导入并等待结果，须检查更新状态，不能视作实时数据（见 5.10） | `OperBoxRepository` + `DepotRepository` + `OperBoxYituliuSync` + `MaaCompositionService` |
 | `maa_get_wiki_article` | `title` (页面标题), `wiki?` ("auto"\|"prts"\|"wiki_gg", 默认"auto") | 获取百科词条全文并转换为纯净标准 Markdown 格式，具备双源路由与海外秒级降级能力 | MediaWiki API (`prop=extracts&explaintext=1` / `parse`) + `OkHttpClient` |
-| `maa_click` | `x`, `y` | 向游戏画面（1280x720 空间）发送单次精准应急点击，用于关闭突发弹窗、活动海报 [X] 或断线重连按钮 | `RemoteServiceManager` + `MaaCoreService.AsyncClick` |
+| `maa_click` | `x`, `y` | 向游戏画面发送单次应急点击；严格要求 `x∈0..1279`、`y∈0..719`，越界拒绝而不是钳制；返回成功仅表示已派发 | `RemoteServiceManager` + `MaaCoreService.AsyncClick` |
 | `maa_back_to_home` | 无 | 调用 MAA Core 原生 BackToHome 状态机，从任意未知/深层子界面或卡死页面安全返回主大厅 | `RemoteServiceManager` + `MaaCoreService.BackToHome` |
+| `maa_visual_click` | `instruction` | 单步诊断/应急：Jev 定位并派发一次点击，可用时返回新抓取的派发后截图；不保证业务目标完成 | `JevSystemOneClient` + `AndroidMaaToolBridge` |
+| `maa_execute_ui_plan` | `goal`, `steps` | 一次执行多步 click、swipe/scroll、wait、verify；支持 region 聚焦与 checkpoint 后置条件；返回已执行步骤、派发/验证数量及截图 | `UiPlanExecutor` + `JevSystemOneClient` |
 
 ---
 
@@ -64,7 +66,7 @@
    - 启用 AI 控制时自动将 `autoCheckUpdate` 与 `autoDownloadUpdate` 置为 `false`，避免被上游官方包覆盖。
 
 6. **应急触屏与全局导航安全边界 (`maa_click` & `maa_back_to_home`)**：
-   - `maa_click` 统一基于 1280x720 逻辑分辨率，内部做 `coerceIn(0, 1280)` 与 `coerceIn(0, 720)` 钳制保护；
+   - `maa_click` 统一基于 1280×720 逻辑分辨率，越界输入直接拒绝；原生返回未派发时不得报告点击成功；
    - 严格限定为应急故障干预微创工具（处理意外活动海报、签到、网络弹窗），绝对禁止用于长程手动通关或脱离任务链的手动刷图；
    - `maa_back_to_home` 复用 MAA Core 原生状态机导航链，内置超时与防卡死保护。
 ---
@@ -170,11 +172,10 @@ Dify 后端沿用既有三项：`ai_dify_base_url`（默认 `http://127.0.0.1/v1
 
 ### 5.5 能力与边界
 
-已支持：SSE 流式逐字输出（末尾 `▍` 光标）、停止生成、Markdown 渲染、「有什么可以帮你？」空态与 4 个可点示例（`ai_chat_example_1..4`）、未配置密钥时的引导卡片、错误分类映射与可复制的原始错误小字、模型驱动的本机工具调用（见 5.7）。
+已支持：SSE 流式输出、停止生成、Markdown 渲染、本地历史会话及切换、导航时保留草稿、工具组与单卡折叠、按需查看截图、跳至最新消息、未配置密钥时的引导与错误分类、模型驱动的本机工具调用（见 5.7）。
 
 明确不做：
 
-- **不做会话管理**：无本地数据库、无历史会话列表、无多会话切换；OpenAI 后端每次请求回放当前内存消息，Dify 后端仅持有一个 `conversation_id`，进程退出即丢失。
 - **不做知识库 UI**：RAG 语料、向量库与 Dify 知识库配置全部留在服务端，APK 内不引入向量库或 Embedding。
 - **不在 APK 内放置业务知识 / 人设提示词**：APK 只生成结构性系统提示词（身份、工具清单、grounding 规则，见 5.7），游戏知识与检索仍在服务端；`OpenAiCompatibleChatClient.streamChat()` 的 `systemPrompt` 默认为空，由 `MaaChatSystemPrompt` 显式传入。
 
@@ -200,24 +201,57 @@ adb shell "am start -a android.intent.action.VIEW -d 'maameow://ai-import?baseUr
 
 ### 5.7 助手即 Agent：工具循环与生成式提示词
 
-开启 AI 控制后，OpenAI 兼容后端把 20 个本机 MCP 工具作为 `tools[]` 随请求发送（`tool_choice: "auto"`）。模型请求工具时，`MaaToolBridgeInvoker` 通过 Koin 注入的同一个 `MaaToolBridge` 执行（与 MCP 服务端共享状态与校验），结果以 `role: "tool"` 回灌，再发起下一轮请求。
+开启 AI 控制后，OpenAI 兼容后端把本机 MCP 工具作为 `tools[]` 随请求发送（`tool_choice: "auto"`）。模型请求工具时，`MaaToolBridgeInvoker` 通过 Koin 注入的同一个 `MaaToolBridge` 执行，结果以 `role: "tool"` 回灌，再发起下一轮请求。截图 Base64 从工具文本中剥离，另以 `image_url` 图像消息发送，不把图片编码当文本 token 消耗。
 
-- **上限**：每回合最多 6 轮（`MAX_TOOL_ROUNDS`）/ 8 次工具调用（`MAX_TOOL_CALLS`）；触顶时追加「已达到本轮工具调用上限（6 轮 / 8 次）…」并停下。
-- **提示词**：`MaaChatSystemPrompt.build(toolSpecs, aiControlEnabled, profileSummary)` 生成身份、工具事实（明确「你有工具，不要说看不到 tools」）、7 条 grounding 规则、用户真实配置名（名字 + `profile_id` + 已启用任务）与语言规则。
+- **上限**：每回合最多 32 轮（`MAX_TOOL_ROUNDS`）/ 64 次工具调用（`MAX_TOOL_CALLS`）；触顶时追加「已达到本轮工具调用上限（32 轮 / 64 次）…」并停下。
+- **提示词**：`MaaChatSystemPrompt.build(toolSpecs, aiControlEnabled, profileSummary)` 生成身份、工具事实（明确「你有工具，不要说看不到 tools」）、11 条工作与 grounding 规则、用户真实配置名（名字 + `profile_id` + 已启用任务）与语言规则。
 - **不漂移**：工具清单直接遍历 `maaToolSpecs`（`ai-mcp/src/main/kotlin/com/aliothmoon/maameow/ai/mcp/MaaToolSpec.kt`），同一份数据供 MCP `tools/list`（`MaaMcpServerFactory.toolSpecs`）、OpenAI `tools[]` 与系统提示词三处使用；新增或改名工具只改这一处，提示词不可能落后于 MCP 服务端。
-- **思考通道**：`delta.reasoning` / `delta.reasoning_content` 单独累积，UI 显示可折叠的「思考中… (N 字)」，出现正文后自动折叠，思考内容不混入正文。
+- **思考通道**：`delta.reasoning` / `delta.reasoning_content` 单独累积，默认折叠、按需展开，不混入正文；工具组与工具详情也默认折叠。
 
 | # | grounding 规则 |
 |---|---|
 | 1 | 需要事实先查工具：状态/进度→`maa_status`；配置→`maa_list_profiles` / `maa_get_profile`；干员与仓库→`maa_get_user_data`；游戏知识→`maa_search_wiki` / `maa_get_wiki_article` |
 | 2 | 不许编造关卡 id、干员名、任务类型或参数字段；查不到就直说并列出候选 |
 | 3 | 配置结构不确定先 `maa_list_task_types` 查 schema，再 create/update |
-| 4 | 长任务用 `maa_run_profile` 拿 `run_id` 后轮询 `maa_status`，不阻塞 |
-| 5 | `maa_click` 仅用于关闭意外弹窗等排障，禁止手动打关或刷图 |
+| 4 | 长任务异步启动并返回 `run_id`；只有用户询问进度时再查询，不在单轮聊天里持续轮询 |
+| 5 | `maa_click` 仅用于单步应急或根据截图精准点击，不猜坐标，不手动打关；正常多步 UI 流程优先用 `maa_execute_ui_plan` |
 | 6 | `maa_screenshot` 受设置开关控制，被拒绝时不反复重试 |
 | 7 | 破坏性操作（`maa_delete_profile`、`maa_stop`、`force=true`）执行前先说明后果 |
+| 8 | 临时任务直接用 `maa_execute_adhoc` 的扁平 `tasks`，不为即席执行强建持久配置 |
+| 9 | 常用流程用 `maa_save_workspace_file` 保存/覆盖，通过 `maa_run_workspace_script` 重放或 `maa_list_workspace_files` 查询 |
+| 10 | 主模型给出有序业务步骤，本地执行器负责定位、坐标与等待；按已完成步骤和当前画面继续，不盲目重放消耗动作，遵守预算与次数限制 |
+| 11 | 玩家数据默认是缓存；缺失、陈旧或升级/消耗后按需刷新相关分类，检查更新状态；更新期间不点击或切换配置，不把下载时间当实时观测 |
 
 **限制**：工具执行依赖 AI 控制已开启。关闭时请求里根本不带 `tools` 字段，也不执行任何工具，模型只能纯文本回答；系统提示词同样会声明「AI 控制已关闭，无法执行设备操作」。
+
+### 5.8 多步 Jev 执行
+
+主模型给出 `goal` 和有序 `steps`（通常只需 `action`、自然语言 `target`；滑动另给 `direction`，重复可用 `repeat`）。本地执行器负责取图、定位、坐标和等待，不必每次点击都重新请求主模型；Jev 是定位/条件判断器，不是自主规划器，也不引入 `click_batch`。
+
+- 普通点击只做目标定位和存在性判断，不要求每次点击或页面切换后验证。只有保存、资源确认或最终业务结果等确有必要的关键结果，才按需提供当前截图可观察的 `post_condition`；`checkpoint=true` 必须配合该条件，前一步检查尽可能与下一次全图定位合并。
+- `region`、自定义坐标和等待参数都是可选高级参数，正常计划无需指定裁图或时序。显式提供 `region` 时须包含完整的归一化 `top/left/bottom/right`；一次定位只用当前全图或一张聚焦图，裁图按需要放大并由本地映射回原图，避免混用坐标系。
+- `swipe` / `scroll` 未指定坐标或 `region` 时，若提供 `target`，执行器会先定位该名称对应的可滚动区域/滑块，再在区域内按 `direction` 滑动；无需主模型猜坐标。
+- 单段最多 15 步、30 次动作、60 秒累计等待，每步最多重复 10 次。取消计划会停止后续动作并释放手势。原生任务或数据更新忙碌期间，UI 计划与视觉点击均被阻止，避免争抢游戏页面。
+- `dispatched` 只表示派发；只有末尾状态通过显式后置条件检查才返回 `verified`。低置信度或检查失败立即停止当前计划；根据 `completed_steps` 和返回画面接续未完成部分，不伪报成功。
+- `maa_visual_click` 可用时返回新抓取的 `screenshot_phase=after_dispatch` 截图，但这不是目标完成保证；`unavailable` 表示派发后截图不可用，不表示点击失败，不应据此重点击。已有当前截图时无需立即再截图。
+- 战斗内部署和技能操作仍交给标准 MAA / Copilot；UI 流程、计划文件或已通关复刷都不是复杂任务端到端首通验收，必须有实际战斗与结果证据才能声称首通。
+
+### 5.9 Token、费用与缓存
+
+聊天按回合和会话记录主模型与 Jev 的真实请求用量，区分输入、输出、缓存读取；以 `requestId` 去重，同一请求的后续流式快照覆盖旧值，不重复累计。没有返回用量或历史消息未记录用量时显示未知，不用文本长度猜 token，也不填零。
+
+服务商返回的实际费用优先作为报告值；缺少费用时，仅对请求地址为 `openrouter.ai` 且精确命中公开模型 ID / `canonical_slug` 别名的请求估算，不做模糊别名匹配或跨服务商套价。价格从[聊天模型目录](https://openrouter.ai/api/v1/models)和[决策模型目录](https://openrouter.ai/api/v1/models?output_modalities=decisions)缓存 24 小时，按非缓存输入、缓存读取与输出分别计价；目录没有缓存读取价时使用普通输入价。费用记录保留来源（`reported` / `openrouter_catalog`）与相应评估/目录缓存时间戳。缺少 token 或价格不填零，也不靠模型名猜免费。部分费用未知时，已知部分的合计只是下界，显示 `≥` 与提示；公开价估算显示 `≈`，不是最终账单。
+
+OpenRouter 请求携带稳定的 `prompt_cache_key` 路由提示，共用固定助手前缀；它不能保证缓存命中。以 `cached_tokens / prompt_tokens` 衡量输入缓存命中率，不能用包含输出或 Jev 的总 token 作分母。参见 [OpenRouter 缓存说明](https://openrouter.ai/docs/guides/best-practices/prompt-caching)及 [Meta 缓存说明](https://dev.meta.ai/docs/cookbook/prompt-caching.md)。
+
+### 5.10 玩家数据快照与按需更新
+
+`maa_get_user_data` 的 `refresh` 是可选 boolean，默认 `false`。返回始终声明 `source=cached_snapshot`、`isLive=false`：`readAtMillis` 是本次读取时间，不是游戏观测时间；各分类的 `hasSynced`、`syncTimeMillis` 与 `ageMillis` 描述已存快照，`hasSynced=true` 也不能证明本次更新成功。结合 `profileId`、更新报告中的来源与时间判断数据适用性。
+
+- 数据缺失、过旧、升级/消耗后或与当前画面矛盾时，按需对相关 `category` 传 `refresh=true`，不要每轮全量刷新。工具按现有配置复用干员箱原生识别或一图流导入，仓库走原生识别，并等待结果，无需主模型轮询；原生识别会改变游戏页面。
+- 检查 `refresh.status`：`snapshot_updated` 表示所请求分类都产生了较新的非空快照且没有跳过导入条目；`partial` 表示仅部分分类更新或存在跳过条目；`not_updated` 表示没有分类满足更新条件。默认缓存读取为 `not_requested`。同时检查 `operatorsUpdated`、`depotUpdated`、`warnings` 与 `upstreamOperatorsSkipped`，如实说明缺失/跳过/失败；启动成功或执行状态回到 idle 都不等于快照更新成功。
+- 一图流来源标记为 `operatorsSource=yituliu_download`；其快照时间是下载/导入时间，不是源数据在游戏中的观测时间，`upstreamObservationTimeKnown=false`。刷新后仍是缓存快照，不保证源数据即时。
+- 取消聊天等待不会强制停止已接纳的原生刷新；等待超时也不能宣称成功，原生识别可能仍在运行。需要停止时使用已有任务停止控制。更新期间不要切换配置或派发 UI 操作；UI 计划与视觉点击会在刷新或原生任务忙碌时拒绝执行。
 
 ---
 
